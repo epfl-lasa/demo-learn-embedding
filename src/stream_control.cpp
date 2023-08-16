@@ -20,7 +20,7 @@
 #include <control_lib/controllers/Feedback.hpp>
 
 using namespace franka_control;
-using namespace optitrack_lib;
+using namespace optitrack;
 using namespace zmq_stream;
 using namespace control_lib;
 
