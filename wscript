@@ -35,18 +35,21 @@ blddir = "build"
 libdir = "franka_control"
 
 compiler = "cxx"
-required = [
+optional = [
     "utilslib",  # for managing reading/writing files
     "controllib",  # provides different types of low levels controllers
     "beautifulbullet",  # robotic simulator
-    "zmqstream",  # stream across Python/C++ application
-]
-optional = [
+    "zmqstream",  # stream across Python/C++
     "optitracklib",  # communicate with the optitrack system
     "frankacontrol"  # control franka robot
 ]
 
-required_bld = {"src/stream_control.cpp": ["OPTITRACKLIB", "FRANKACONTROL"]}
+required_bld = {
+    "src/ds_control.cpp": ["UTILSLIB", "BEAUTIFULBULLET", "CONTROLLIB"],
+    "src/joint_control.cpp": ["ZMQSTREAM", "FRANKACONTROL", "BEAUTIFULBULLET", "CONTROLLIB"],
+    "src/plot_surface.cpp": ["GRAPHICSLIB", "UTILSLIB"],
+    "src/stream_control.cpp": ["OPTITRACKLIB", "FRANKACONTROL", "CONTROLLIB"],
+}
 
 
 def options(opt):
@@ -61,12 +64,12 @@ def options(opt):
                    help="build static library")
 
     # Load library options
-    load(opt, compiler, required=required, optional=optional)
+    load(opt, compiler, required=None, optional=optional)
 
 
 def configure(cfg):
     # Load library configurations
-    load(cfg, compiler, required=required, optional=optional)
+    load(cfg, compiler, required=None, optional=optional)
 
 
 def build(bld):
@@ -79,8 +82,6 @@ def build(bld):
             if not set(required_bld[example]).issubset(bld.env["libs"]):
                 break
 
-    # Compile all the examples
-    for example in sources:
         bld.program(
             features="cxx",
             source=example,
