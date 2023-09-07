@@ -34,3 +34,5 @@
 build/
 .lock-waf_linux_build
 .lock-waf_darwin_build
+.vscode
+outputs/

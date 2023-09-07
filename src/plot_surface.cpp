@@ -37,10 +37,10 @@ int main(int argc, char** argv)
 
     // Load mesh
     FileManager io_manager;
-    Eigen::MatrixXd vertices = io_manager.setFile("rsc/mesh.obj").read<Eigen::MatrixXd>("$Nodes", 1),
-                    indices = io_manager.read<Eigen::MatrixXd>("$Elements", 1).array() - 1;
+    Eigen::MatrixXd vertices = io_manager.setFile("rsc/mesh_points.csv").read<Eigen::MatrixXd>(),
+                    indices = io_manager.setFile("rsc/mesh_faces.csv").read<Eigen::MatrixXd>();
 
-    Eigen::VectorXd fun = Eigen::VectorXd::Random(vertices.rows());
+    Eigen::VectorXd fun = io_manager.setFile("rsc/mesh_values.csv").read<Eigen::MatrixXd>();
 
     // std::filesystem::path p = "foo.c";
     // std::cout << "Current path is " << std::filesystem::current_path() << '\n';
@@ -51,7 +51,8 @@ int main(int argc, char** argv)
     app
         .setBackground("white")
         .surface(vertices, fun, indices)
-        .setTransformation(Matrix4::scaling({0.05, 0.05, 0.05}));
+        .setTransformation(Matrix4::rotationX(1.5_radf));
+    // .setTransformation(Matrix4::scaling({0.5, 0.5, 0.5}));
 
     return app.exec();
 }

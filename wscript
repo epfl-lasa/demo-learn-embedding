@@ -49,6 +49,8 @@ required_bld = {
     "src/joint_control.cpp": ["ZMQSTREAM", "FRANKACONTROL", "BEAUTIFULBULLET", "CONTROLLIB"],
     "src/plot_surface.cpp": ["GRAPHICSLIB", "UTILSLIB"],
     "src/stream_control.cpp": ["OPTITRACKLIB", "FRANKACONTROL", "CONTROLLIB"],
+    "src/qp_control.cpp": ["UTILSLIB", "BEAUTIFULBULLET", "CONTROLLIB"],
+    "src/ik_control.cpp": ["UTILSLIB", "BEAUTIFULBULLET", "CONTROLLIB"],
 }
 
 
