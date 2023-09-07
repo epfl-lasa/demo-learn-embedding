@@ -9,3 +9,7 @@ Create frames
 ```sh
 apitrace dump-images -o outputs/ ik_control.trace
 ```
+Generate urdf from xacro
+```sh
+xacro [in.urdf.xacro] > [out.urdf]
+```
