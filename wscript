@@ -51,6 +51,7 @@ required_bld = {
     "src/stream_control.cpp": ["OPTITRACKLIB", "FRANKACONTROL", "CONTROLLIB"],
     "src/qp_control.cpp": ["UTILSLIB", "BEAUTIFULBULLET", "CONTROLLIB"],
     "src/ik_control.cpp": ["UTILSLIB", "BEAUTIFULBULLET", "CONTROLLIB"],
+    "src/stream_sim.cpp": ["ZMQSTREAM", "BEAUTIFULBULLET", "CONTROLLIB"],
 }
 
 

@@ -16,7 +16,7 @@ embedding = Embedding(approximator)
 stiffness = SPD(3)
 offset = torch.tensor([0.56, -0.44, 0.034])
 model = FirstGeometry(embedding, torch.tensor([0.0, 0.0, 0.0]), stiffness)
-TorchHelper.load(model, 'outputs/robotic_demo_5_1')
+TorchHelper.load(model, 'models/robotic_demo_5_1')
 
 rep = Replier()
 rep.configure("0.0.0.0", "5511")

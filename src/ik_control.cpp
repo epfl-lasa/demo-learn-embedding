@@ -103,8 +103,8 @@ struct IKController : public control::MultiBodyCtr {
             // .velocityTracking(Q, _config)
             .slackVariable(W)
             .inverseKinematics(state, _task)
-            // .positionLimits(state)
-            // .velocityLimits()
+            .positionLimits(state)
+            .velocityLimits()
             .init();
     }
 
