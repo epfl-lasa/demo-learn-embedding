@@ -183,19 +183,19 @@ int main(int argc, char const* argv[])
     // plot trajectory
     static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().trajectory(traj);
 
-    // plot mesh
-    Eigen::MatrixXd vertices = mng.setFile("rsc/mesh_points.csv").read<Eigen::MatrixXd>(),
-                    indices = mng.setFile("rsc/mesh_faces.csv").read<Eigen::MatrixXd>();
-    Eigen::VectorXd fun = mng.setFile("rsc/mesh_values.csv").read<Eigen::MatrixXd>();
-    static_cast<graphics::MagnumGraphics&>(simulator.graphics())
-        .app()
-        .surface(vertices, fun, indices)
-        .setTransformation(Matrix4::scaling({0.2, 0.2, 0.2}) * Matrix4::translation({2.0, -2.3, 0.0}) * Matrix4::rotationX(2.5_radf));
+    // // plot mesh
+    // Eigen::MatrixXd vertices = mng.setFile("rsc/mesh_points.csv").read<Eigen::MatrixXd>(),
+    //                 indices = mng.setFile("rsc/mesh_faces.csv").read<Eigen::MatrixXd>();
+    // Eigen::VectorXd fun = mng.setFile("rsc/mesh_values.csv").read<Eigen::MatrixXd>();
+    // static_cast<graphics::MagnumGraphics&>(simulator.graphics())
+    //     .app()
+    //     .surface(vertices, fun, indices)
+    //     .setTransformation(Matrix4::scaling({0.2, 0.2, 0.2}) * Matrix4::translation({2.0, -2.3, 0.0}) * Matrix4::rotationX(2.5_radf));
 
     // // run
     // simulator.run();
     simulator.initGraphics();
-    static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().camera3D().setPose(Vector3{2., -2.5, 2.});
+    // static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().camera3D().setPose(Vector3{2., -2.5, 2.});
 
     size_t index = 0;
     double t = 0.0, dt = 1e-3, T = 10.0;

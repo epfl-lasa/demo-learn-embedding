@@ -30,6 +30,7 @@
 
 // Spaces
 #include <control_lib/spatial/SE.hpp>
+#include <control_lib/spatial/SO.hpp>
 
 // Controllers
 #include <control_lib/controllers/Feedback.hpp>
@@ -52,15 +53,18 @@ using namespace utils_lib;
 using namespace std::chrono;
 using namespace zmq_stream;
 
-struct Params {
+using R3 = spatial::R<3>;
+using R7 = spatial::R<7>;
+using SE3 = spatial::SE<3>;
+using SO3 = spatial::SO<3, true>;
+
+struct ParamsConfig {
     struct controller : public defaults::controller {
         PARAM_SCALAR(double, dt, 1.0);
     };
 
-    struct linear_dynamics : public defaults::linear_dynamics {
-    };
-
     struct feedback : public defaults::feedback {
+        PARAM_SCALAR(size_t, d, 7);
     };
 
     struct inverse_kinematics : public defaults::inverse_kinematics {
@@ -72,28 +76,98 @@ struct Params {
     };
 };
 
+struct ParamsTask {
+    struct controller : public defaults::controller {
+        PARAM_SCALAR(double, dt, 1.0);
+    };
+
+    struct feedback : public defaults::feedback {
+        PARAM_SCALAR(size_t, d, 3);
+    };
+};
+
+struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
+    TaskDynamics()
+    {
+        _d = SE3::dimension();
+        _u.setZero(_d);
+
+        // position ds weights
+        _pos.setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3));
+
+        // orientation ds weights
+        _rot.setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3));
+
+        // external ds stream
+        _external = false;
+        _requester.configure("128.178.145.171", "5511");
+    }
+
+    TaskDynamics& setReference(const SE3& x)
+    {
+        _pos.setReference(R3(x._trans));
+        _rot.setReference(SO3(x._rot));
+        return *this;
+    }
+
+    TaskDynamics& setExternal(const bool& value)
+    {
+        _external = value;
+        return *this;
+    }
+
+    void update(const SE3& x) override
+    {
+        // position ds
+        _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(x._trans, 3) : _pos(R3(x._trans));
+
+        // orientation ds
+        _u.tail(3) = _rot(SO3(x._rot));
+    }
+
+protected:
+    using AbstractController<ParamsTask, SE3>::_d;
+    using AbstractController<ParamsTask, SE3>::_xr;
+    using AbstractController<ParamsTask, SE3>::_u;
+
+    controllers::Feedback<ParamsTask, R3> _pos;
+    controllers::Feedback<ParamsTask, SO3> _rot;
+
+    bool _external;
+    Requester _requester;
+};
+
+struct FrankaModel : public bodies::MultiBody {
+public:
+    FrankaModel() : bodies::MultiBody("rsc/franka/panda.urdf"), _frame("panda_link7"), _reference(pinocchio::WORLD) {}
+
+    Eigen::MatrixXd jacobian(const Eigen::VectorXd& q) { return static_cast<bodies::MultiBody*>(this)->jacobian(q, _frame, _reference); }
+
+    std::string _frame;
+    pinocchio::ReferenceFrame _reference;
+};
+
 struct IKController : public control::MultiBodyCtr {
-    IKController(const bodies::MultiBodyPtr& model, const spatial::SE<3>& target_pose) : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE)
+    IKController(const std::shared_ptr<FrankaModel>& model, const SE3& target_pose) : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE)
     {
         // integration step
         _dt = 1.0;
 
         // reference frame for inverse kinematics
-        _frame = "panda_link7";
+        _frame = model->_frame;
 
         // configuration target
-        spatial::R<7> state, target_state;
+        R7 state, target_state;
         state._x = model->state();
         target_state._x = (model->positionUpper() - model->positionLower()) * 0.5 + model->positionLower();
         _config
-            .setDynamicsMatrix(1 * Eigen::MatrixXd::Identity(7, 7))
+            .setStiffness(1.0 * Eigen::MatrixXd::Identity(7, 7))
             .setReference(target_state)
             .update(state);
 
         // task target
-        spatial::SE<3> pose(model->frameOrientation(), model->framePosition());
+        SE3 pose(model->frameOrientation(), model->framePosition());
         _task
-            .setDynamicsMatrix(1 * Eigen::MatrixXd::Identity(6, 6))
             .setReference(target_pose)
             .update(pose);
 
@@ -110,43 +184,71 @@ struct IKController : public control::MultiBodyCtr {
             // .positionLimits(state)
             // .velocityLimits()
             .init();
+
+        // joints controller
+        Eigen::MatrixXd K = Eigen::MatrixXd::Zero(7, 7), D = Eigen::MatrixXd::Zero(7, 7);
+        K.diagonal() << 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 1.0;
+        D.diagonal() << 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 1.0;
+        _ctr
+            .setStiffness(K)
+            .setDamping(D);
     }
 
-    IKController& setTarget(const spatial::SE<3>& target_pose)
+    IKController& setTarget(const SE3& target_pose)
     {
         _task.setReference(target_pose);
         return *this;
     }
 
+    IKController& setExternalDynamics(const bool& value)
+    {
+        _task.setExternal(value);
+        return *this;
+    }
+
     Eigen::VectorXd action(bodies::MultiBody& body) override
     {
-        // update config
-        spatial::R<7> state;
+        // config
+        R7 state;
         state._x = body.state();
+        state._v = body.velocity();
         _config.update(state);
 
-        // update task
-        spatial::SE<3> pose(body.framePose(_frame));
+        // task
+        SE3 pose(body.framePose(_frame));
         _task.update(pose);
 
-        return state._x + _dt * _ik.action(state).segment(0, 7);
+        // ik
+        auto ref = R7(state._x + _dt * _ik.action(state).segment(0, 7));
+        ref._v = Eigen::VectorXd::Zero(7);
+
+        // controller
+        // Eigen::VectorXd state_ref(7);
+        // state_ref << 0, 0, 0, -1.5708, 0, 1.8675, 0;
+        // R7 reference((Eigen::Matrix<double, 7, 1>() << 0.300325, 0.596986, 0.140127, -1.44853, 0.15547, 2.31046, 0.690596).finished());
+        // reference._v = Eigen::VectorXd::Zero(7);
+
+        // Eigen::MatrixXd mat = Eigen::MatrixXd::Zero(7, 7);
+        // mat.diagonal() << 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0;
+        // return mat * (reference._x - state._x) - 3.0 * state._v + body.gravityVector(state._x);
+
+        return _ctr.setReference(ref).action(state);
     }
 
     // step
     double _dt;
 
-    // configuration/task space target
-    controllers::LinearDynamics<Params, spatial::R<7>> _config;
-    controllers::LinearDynamics<Params, spatial::SE<3>> _task;
+    // configuration space ds
+    controllers::Feedback<ParamsConfig, R7> _config;
+
+    // task space ds
+    TaskDynamics _task;
 
     // inverse dynamics
-    controllers::InverseKinematics<Params, bodies::MultiBody> _ik;
+    controllers::InverseKinematics<ParamsConfig, FrankaModel> _ik;
 
     // joint space controller
-    controllers::Feedback<Params, spatial::R<7>> _ctr;
-
-    // streamer
-    Requester _requester;
+    controllers::Feedback<ParamsConfig, R7> _ctr;
 };
 
 int main(int argc, char const* argv[])
@@ -161,7 +263,7 @@ int main(int argc, char const* argv[])
     simulator.addGround();
 
     // Multi Bodies
-    bodies::MultiBodyPtr franka = std::make_shared<bodies::MultiBody>("rsc/franka/panda.urdf");
+    auto franka = std::make_shared<FrankaModel>();
     Eigen::VectorXd state_ref = (franka->positionUpper() - franka->positionLower()) * 0.5 + franka->positionLower();
     franka->setState(state_ref);
 
@@ -173,42 +275,25 @@ int main(int argc, char const* argv[])
     // task space target
     Eigen::Vector3d xDes = traj.row(0);
     Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
-    spatial::SE<3> tDes(oDes, xDes);
-
-    Eigen::VectorXd state(7);
-    auto ctr = std::make_unique<IKController>(franka, tDes);
-    for (size_t i = 0; i < 5; i++) {
-        state = ctr->action(*franka);
-        franka->setState(state);
-    }
+    SE3 tDes(oDes, xDes);
 
     // Set controlled robot
     (*franka)
-        .activateGravity();
-    // .addControllers(std::make_unique<IKController>(franka, tDes));
+        .activateGravity()
+        .addControllers(std::make_unique<IKController>(franka, tDes));
 
     // Add robots and run simulation
-    simulator.add(franka);
+    simulator.add(static_cast<bodies::MultiBodyPtr>(franka));
 
     // plot trajectory
     static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().trajectory(traj);
 
-    // plot mesh
-    Eigen::MatrixXd vertices = mng.setFile("rsc/mesh_points.csv").read<Eigen::MatrixXd>(),
-                    indices = mng.setFile("rsc/mesh_faces.csv").read<Eigen::MatrixXd>();
-    Eigen::VectorXd fun = mng.setFile("rsc/mesh_values.csv").read<Eigen::MatrixXd>();
-    static_cast<graphics::MagnumGraphics&>(simulator.graphics())
-        .app()
-        .surface(vertices, fun, indices)
-        .setTransformation(Matrix4::scaling({0.2, 0.2, 0.2}) * Matrix4::translation({2.0, -2.3, 0.0}) * Matrix4::rotationX(2.5_radf));
-
-    // // run
+    // run
     // simulator.run();
     simulator.initGraphics();
-    static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().camera3D().setPose(Vector3{2., -2.5, 2.});
 
     size_t index = 0;
-    double t = 0.0, dt = 1e-3, T = 10.0;
+    double t = 0.0, dt = 1e-3, T = 20.0;
 
     auto next = steady_clock::now();
     auto prev = next - 1ms;
@@ -224,21 +309,22 @@ int main(int argc, char const* argv[])
 
         t += dt;
 
-        if (size_t(t / dt) % 10 == 0) {
-            if (index < traj.rows() - 1) {
-                index++;
-                xDes = traj.row(index);
-                ctr->setTarget(spatial::SE<3>(oDes, xDes));
-                for (size_t i = 0; i < 5; i++) {
-                    state = ctr->action(*franka);
-                    franka->setState(state);
-                }
-                for (size_t i = 0; i < state.rows(); i++) {
-                    if (state(i) >= limits_up(i) || state(i) <= limits_down(i))
-                        std::cout << "error" << std::endl;
-                }
-            }
-        }
+        // if (size_t(t / dt) % 10 == 0) {
+        //     if (index < traj.rows() - 1) {
+        //         index++;
+        //         xDes = traj.row(index);
+        //         ctr->setTarget(SE3(oDes, xDes));
+        //         for (size_t i = 0; i < 5; i++) {
+        //             state = ctr->action(*franka);
+        //             franka->setState(state);
+        //         }
+        //         for (size_t i = 0; i < state.rows(); i++) {
+        //             if (state(i) >= limits_up(i) || state(i) <= limits_down(i))
+        //                 std::cout << "error" << std::endl;
+        //         }
+        //     }
+        // }
+        std::cout << (xDes - franka->framePosition("panda_link7")).norm() << std::endl;
 
         prev = now;
         next += 1ms;

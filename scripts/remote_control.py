@@ -14,7 +14,7 @@ from learn_embedding.approximators import *
 approximator = FeedForward(3, [32, 32, 32], 1)
 embedding = Embedding(approximator)
 stiffness = SPD(3)
-offset = torch.tensor([0.56, -0.44, 0.034])
+offset = torch.tensor([0.5, -0.5, 0.5])
 model = FirstGeometry(embedding, torch.tensor([0.0, 0.0, 0.0]), stiffness)
 TorchHelper.load(model, 'models/robotic_demo_5_1')
 
@@ -25,8 +25,7 @@ rep.configure("0.0.0.0", "5511")
 def dynamics(x):
     x = torch.tensor(x[np.newaxis, :]).float().requires_grad_(True) - offset
     xdot = model(x).detach().squeeze().to(dtype=torch.float64).numpy()
-    if torch.norm(x) >= 0.05:
-        xdot = xdot/np.linalg.norm(xdot)*0.5
+
     return xdot
 
 
