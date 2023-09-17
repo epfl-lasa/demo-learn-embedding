@@ -139,7 +139,7 @@ protected:
 
 struct FrankaModel : public bodies::MultiBody {
 public:
-    FrankaModel() : bodies::MultiBody("rsc/franka/panda.urdf"), _frame("panda_link7"), _reference(pinocchio::WORLD) {}
+    FrankaModel() : bodies::MultiBody("rsc/franka/panda.urdf"), _frame("panda_joint_8"), _reference(pinocchio::WORLD) {}
 
     Eigen::MatrixXd jacobian(const Eigen::VectorXd& q) { return static_cast<bodies::MultiBody*>(this)->jacobian(q, _frame, _reference); }
 
@@ -151,7 +151,7 @@ struct IKController : public control::MultiBodyCtr {
     IKController(const std::shared_ptr<FrankaModel>& model, const SE3& target_pose) : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE)
     {
         // integration step
-        _dt = 1.0;
+        _dt = 0.03;
 
         // reference frame for inverse kinematics
         _frame = model->_frame;
@@ -181,13 +181,13 @@ struct IKController : public control::MultiBodyCtr {
             // .velocityTracking(Q, _config)
             .slackVariable(W)
             .inverseKinematics(state, _task)
-            // .positionLimits(state)
-            // .velocityLimits()
+            .positionLimits(state)
+            .velocityLimits()
             .init();
 
         // joints controller
         Eigen::MatrixXd K = Eigen::MatrixXd::Zero(7, 7), D = Eigen::MatrixXd::Zero(7, 7);
-        K.diagonal() << 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 1.0;
+        K.diagonal() << 700.0, 700.0, 700.0, 700.0, 500.0, 500.0, 50.0;
         D.diagonal() << 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 1.0;
         _ctr
             .setStiffness(K)
@@ -232,7 +232,7 @@ struct IKController : public control::MultiBodyCtr {
         // mat.diagonal() << 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0;
         // return mat * (reference._x - state._x) - 3.0 * state._v + body.gravityVector(state._x);
 
-        return _ctr.setReference(ref).action(state);
+        return _ctr.setReference(ref).action(state) + body.gravityVector(state._x);
     }
 
     // step
@@ -277,10 +277,12 @@ int main(int argc, char const* argv[])
     Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
     SE3 tDes(oDes, xDes);
 
+    auto controller = std::make_shared<IKController>(franka, tDes);
+
     // Set controlled robot
     (*franka)
-        .activateGravity()
-        .addControllers(std::make_unique<IKController>(franka, tDes));
+        // .activateGravity()
+        .addControllers(controller);
 
     // Add robots and run simulation
     simulator.add(static_cast<bodies::MultiBodyPtr>(franka));
@@ -324,7 +326,13 @@ int main(int argc, char const* argv[])
         //         }
         //     }
         // }
-        std::cout << (xDes - franka->framePosition("panda_link7")).norm() << std::endl;
+        if ((xDes - franka->framePosition("panda_joint8")).norm() <= 0.01 && enter) {
+            std::cout << "Activating DS" << std::endl;
+            controller->setExternalDynamics(true);
+            enter = false;
+        }
+
+        // std::cout << (xDes - franka->framePosition("panda_link7")).norm() << std::endl;
 
         prev = now;
         next += 1ms;
