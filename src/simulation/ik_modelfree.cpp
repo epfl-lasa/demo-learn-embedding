@@ -105,7 +105,7 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
 
         // external ds stream
         _external = false;
-        _requester.configure("128.178.145.171", "5511");
+        _requester.configure("localhost", "5511");
     }
 
     TaskDynamics& setReference(const SE3& x)
@@ -263,12 +263,21 @@ int main(int argc, char const* argv[])
     franka->setState(state_ref);
 
     // trajectory
+    std::string demo = "demo_2";
     FileManager mng;
-    Eigen::MatrixXd traj = mng.setFile("rsc/trajectory.csv").read<Eigen::MatrixXd>();
-    traj.rowwise() += Eigen::RowVector3d(0.5, -0.5, 0.5);
+    Eigen::VectorXd offset = mng.setFile("rsc/demos/" + demo + "/offset.csv").read<Eigen::MatrixXd>();
+    std::vector<Eigen::MatrixXd> trajectories;
+    for (size_t i = 1; i <= 7; i++) {
+        trajectories.push_back(mng.setFile("rsc/demos/" + demo + "/trajectory_" + std::to_string(i) + ".csv").read<Eigen::MatrixXd>());
+        trajectories.back().rowwise() += offset.transpose();
+        static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().trajectory(trajectories.back(), i >= 4 ? "red" : "green");
+    }
+
+    // Eigen::MatrixXd traj = mng.setFile("rsc/demos/" + demo + "/trajectory_1.csv").read<Eigen::MatrixXd>();
+    // traj.rowwise() += offset.transpose();
 
     // task space target
-    Eigen::Vector3d xDes = traj.row(0);
+    Eigen::Vector3d xDes = trajectories[0].row(0);
     Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
     SE3 tDes(oDes, xDes);
 
@@ -283,14 +292,14 @@ int main(int argc, char const* argv[])
     simulator.add(static_cast<bodies::MultiBodyPtr>(franka));
 
     // plot trajectory
-    static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().trajectory(traj);
+    // static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().trajectory(trajectories[0]);
 
     // run
     // simulator.run();
     simulator.initGraphics();
 
     size_t index = 0;
-    double t = 0.0, dt = 1e-3, T = 20.0;
+    double t = 0.0, dt = 1e-3, T = 40.0;
 
     auto next = steady_clock::now();
     auto prev = next - 1ms;

@@ -82,12 +82,17 @@ def build(bld):
 
     for example in sources:
         if example in required_bld:
-            if not set(required_bld[example]).issubset(bld.env["libs"]):
-                break
-
-        bld.program(
-            features="cxx",
-            source=example,
-            uselib=bld.env["libs"],
-            target=example[:-len(".cpp")],
-        )
+            if set(required_bld[example]).issubset(bld.env["libs"]):
+                bld.program(
+                    features="cxx",
+                    source=example,
+                    uselib=bld.env["libs"],
+                    target=example[:-len(".cpp")],
+                )
+        else:
+            bld.program(
+                    features="cxx",
+                    source=example,
+                    uselib=bld.env["libs"],
+                    target=example[:-len(".cpp")],
+                )

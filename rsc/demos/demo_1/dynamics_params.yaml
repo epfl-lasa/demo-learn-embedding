@@ -1,0 +1,14 @@
+dynamics:
+  dimension: 3
+
+  order: 1
+
+  stiffness:
+    type: full
+
+  dissipation:
+    type: full
+
+  approximator:
+    num_neurons: 32
+    num_layers: 3
