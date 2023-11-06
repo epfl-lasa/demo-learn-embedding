@@ -127,7 +127,7 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
         _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(x._trans, 3) : _pos(R3(x._trans));
 
         // orientation ds
-        _u.tail(3) = _rot(SO3(x._rot));
+        _u.tail(3) = _rot(SO3(x._rot)); // _u.tail(3).setZero();
     }
 
 protected:
@@ -183,7 +183,7 @@ struct IKController : public control::MultiBodyCtr {
         _ik
             .setModel(model)
             .stateCost(Q)
-            // .stateReference(Q, _config)
+            // .stateReference(_config.output())
             .slackCost(S)
             .inverseKinematics(_task.output())
             .positionLimits()
@@ -267,7 +267,7 @@ int main(int argc, char const* argv[])
     FileManager mng;
     Eigen::VectorXd offset = mng.setFile("rsc/demos/" + demo + "/offset.csv").read<Eigen::MatrixXd>();
     std::vector<Eigen::MatrixXd> trajectories;
-    for (size_t i = 1; i <= 7; i++) {
+    for (size_t i = 1; i <= 1; i++) {
         trajectories.push_back(mng.setFile("rsc/demos/" + demo + "/trajectory_" + std::to_string(i) + ".csv").read<Eigen::MatrixXd>());
         trajectories.back().rowwise() += offset.transpose();
         static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().trajectory(trajectories.back(), i >= 4 ? "red" : "green");
