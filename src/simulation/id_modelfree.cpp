@@ -101,9 +101,10 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
         _u.setZero(_d);
 
         // position ds weights
+        double k = 5.0, d = 3.0 * std::sqrt(k);
         _pos
-            .setStiffness(2.0 * Eigen::MatrixXd::Identity(3, 3))
-            .setDamping(0.1 * Eigen::MatrixXd::Identity(3, 3));
+            .setStiffness(k * Eigen::MatrixXd::Identity(3, 3))
+            .setDamping(d * Eigen::MatrixXd::Identity(3, 3));
 
         // orientation ds weights
         _rot.setStiffness(2.0 * Eigen::MatrixXd::Identity(3, 3))
@@ -157,7 +158,15 @@ struct FrankaModel : public bodies::MultiBody {
 public:
     FrankaModel() : bodies::MultiBody("rsc/franka/panda.urdf"), _frame("panda_joint_8"), _reference(pinocchio::WORLD) {}
 
-    Eigen::MatrixXd jacobian(const Eigen::VectorXd& q) { return static_cast<bodies::MultiBody*>(this)->jacobian(q, _frame, _reference); }
+    Eigen::MatrixXd jacobian(const Eigen::VectorXd& q)
+    {
+        return static_cast<bodies::MultiBody*>(this)->jacobian(q, _frame, _reference);
+    }
+
+    Eigen::MatrixXd jacobianDerivative(const Eigen::VectorXd& q, const Eigen::VectorXd& dq)
+    {
+        return static_cast<bodies::MultiBody*>(this)->jacobianDerivative(q, dq, _frame, _reference);
+    }
 
     std::string _frame;
     pinocchio::ReferenceFrame _reference;

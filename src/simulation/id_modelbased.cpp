@@ -62,7 +62,7 @@ using SO3 = spatial::SO<3, true>;
 
 struct ParamsConfig {
     struct controller : public defaults::controller {
-        PARAM_SCALAR(double, dt, 1.0);
+        PARAM_SCALAR(double, dt, 0.01);
     };
 
     struct feedback : public defaults::feedback {
@@ -86,7 +86,7 @@ struct ParamsConfig {
 
 struct ParamsTask {
     struct controller : public defaults::controller {
-        PARAM_SCALAR(double, dt, 1.0);
+        PARAM_SCALAR(double, dt, 0.01);
     };
 
     struct feedback : public defaults::feedback {
@@ -101,9 +101,10 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
         _u.setZero(_d);
 
         // position ds weights
+        double k = 0.0, d = 2.0 * std::sqrt(k);
         _pos
-            .setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3))
-            .setDamping(0.5 * Eigen::MatrixXd::Identity(3, 3));
+            .setStiffness(k * Eigen::MatrixXd::Identity(3, 3))
+            .setDamping(d * Eigen::MatrixXd::Identity(3, 3));
 
         // orientation ds weights
         _rot.setStiffness(2.0 * Eigen::MatrixXd::Identity(3, 3))
@@ -163,7 +164,15 @@ struct FrankaModel : public bodies::MultiBody {
 public:
     FrankaModel() : bodies::MultiBody("rsc/franka/panda.urdf"), _frame("panda_joint_8"), _reference(pinocchio::WORLD) {}
 
-    Eigen::MatrixXd jacobian(const Eigen::VectorXd& q) { return static_cast<bodies::MultiBody*>(this)->jacobian(q, _frame, _reference); }
+    Eigen::MatrixXd jacobian(const Eigen::VectorXd& q)
+    {
+        return static_cast<bodies::MultiBody*>(this)->jacobian(q, _frame, _reference);
+    }
+
+    Eigen::MatrixXd jacobianDerivative(const Eigen::VectorXd& q, const Eigen::VectorXd& dq)
+    {
+        return static_cast<bodies::MultiBody*>(this)->jacobianDerivative(q, dq, _frame, _reference);
+    }
 
     std::string _frame;
     pinocchio::ReferenceFrame _reference;
@@ -173,7 +182,7 @@ struct IKController : public control::MultiBodyCtr {
     IKController(const std::shared_ptr<FrankaModel>& model, const SE3& target_pose) : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE)
     {
         // integration step
-        _dt = 0.01;
+        _dt = ParamsConfig::controller::dt();
 
         // reference frame for inverse kinematics
         _frame = model->_frame;
@@ -247,7 +256,11 @@ struct IKController : public control::MultiBodyCtr {
         pose._v = body.frameVelocity(state._x, state._v, _frame);
         _task.update(pose);
 
-        return _id(state).segment(7, 7);
+        auto sol = _id(state);
+        // auto ref = R7(state._x + _dt * state._v + 0.5 * _dt * _dt * sol.segment(0, 7));
+
+        // return 900 * (ref._x - state._x) - 10 * state._v + body.nonLinearEffects(state._x, state._v);
+        return sol.segment(7, 7);
     }
 
     // step
