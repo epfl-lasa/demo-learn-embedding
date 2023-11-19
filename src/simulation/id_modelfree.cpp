@@ -42,6 +42,9 @@
 // Stream
 #include <zmq_stream/Requester.hpp>
 
+// parse yaml
+#include <yaml-cpp/yaml.h>
+
 #include <chrono>
 #include <iostream>
 #include <thread>
@@ -99,11 +102,11 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
 
         // position ds weights
         _pos
-            .setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3))
+            .setStiffness(2.0 * Eigen::MatrixXd::Identity(3, 3))
             .setDamping(0.1 * Eigen::MatrixXd::Identity(3, 3));
 
         // orientation ds weights
-        _rot.setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3))
+        _rot.setStiffness(2.0 * Eigen::MatrixXd::Identity(3, 3))
             .setDamping(0.1 * Eigen::MatrixXd::Identity(3, 3));
 
         // external ds stream
@@ -127,10 +130,15 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
     void update(const SE3& x) override
     {
         // position ds
-        _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(x._trans, 3) : _pos(R3(x._trans));
+        auto p = R3(x._trans);
+        p._v = x._v.head(3);
+        _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(x._trans, 3) : _pos(p);
 
         // orientation ds
-        _u.tail(3) = _rot(SO3(x._rot));
+        // auto r = SO3(x._rot);
+        // r._v = x._v.tail(3);
+        // _u.tail(3) = _rot(r);
+        _u.tail(3).setZero();
     }
 
 protected:
@@ -159,15 +167,14 @@ struct IDController : public control::MultiBodyCtr {
     IDController(const std::shared_ptr<FrankaModel>& model, const SE3& target_pose) : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE)
     {
         // integration step
-        _dt = 0.015;
+        _dt = 0.01;
 
         // reference frame for inverse kinematics
         _frame = model->_frame;
 
         // ds in configuration space to generate the
         // desired joint velocities/accelerations for the qp
-        R7 state(model->state()),
-            target_state((model->positionUpper() - model->positionLower()) * 0.5 + model->positionLower());
+        R7 state(model->state()), target_state((model->positionUpper() - model->positionLower()) * 0.5 + model->positionLower());
         state._v = model->velocity();
         target_state._v.setZero();
         _config
@@ -185,8 +192,9 @@ struct IDController : public control::MultiBodyCtr {
             .update(pose);
 
         // inverse kinematics
-        Eigen::MatrixXd Q = 1.0 * Eigen::MatrixXd::Identity(7, 7),
-                        S = 10.0 * Eigen::MatrixXd::Identity(6, 6);
+        Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(7, 7), S = Eigen::MatrixXd::Zero(6, 6);
+        Q.diagonal() << 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0;
+        S.diagonal() << 30.0, 30.0, 30.0, 10.0, 10.0, 10.0;
 
         _id
             .setModel(model)
@@ -195,14 +203,14 @@ struct IDController : public control::MultiBodyCtr {
             .slackCost(S)
             .inverseDynamics(_task.output())
             // .inverseKinematics(_task.output())
-            // .positionLimits()
-            // .velocityLimits()
-            // .accelerationLimits()
+            .positionLimits()
+            .velocityLimits()
+            .accelerationLimits()
             .init(state);
 
         // joints controller
         Eigen::MatrixXd K = Eigen::MatrixXd::Zero(7, 7), D = Eigen::MatrixXd::Zero(7, 7);
-        K.diagonal() << 700.0, 700.0, 700.0, 700.0, 500.0, 500.0, 50.0;
+        K.diagonal() << 950.0, 950.0, 950.0, 950.0, 500.0, 500.0, 50.0;
         D.diagonal() << 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 1.0;
         _ctr
             .setStiffness(K)
@@ -234,12 +242,9 @@ struct IDController : public control::MultiBodyCtr {
         _task.update(pose);
 
         // id
-        // auto ref = R7(state._x + _dt * state._v + 0.5 * _dt * _dt * _id(state).segment(0, 7));
-        auto ref = R7(state._x + _dt * _id(state).segment(0, 7));
+        auto ref = R7(state._x + _dt * state._v + 0.5 * _dt * _dt * _id(state).segment(0, 7));
         ref._v = Eigen::VectorXd::Zero(7);
         return _ctr.setReference(ref).action(state) + body.gravityVector(state._x);
-
-        // return 0.1 * _id(state).segment(0, 7) + body.gravityVector(state._x);
     }
 
     // step
@@ -275,13 +280,15 @@ int main(int argc, char const* argv[])
     franka->setState(state_ref);
 
     // trajectory
-    std::string demo = "demo_1";
+    std::string demo = (argc > 1) ? "demo_" + std::string(argv[1]) : "demo_1";
+    YAML::Node config = YAML::LoadFile("rsc/demos/" + demo + "/dynamics_params.yaml");
+    auto offset = config["dynamics"]["offset"].as<std::vector<double>>();
+
     FileManager mng;
-    Eigen::VectorXd offset = mng.setFile("rsc/demos/" + demo + "/offset.csv").read<Eigen::MatrixXd>();
     std::vector<Eigen::MatrixXd> trajectories;
     for (size_t i = 1; i <= 1; i++) {
         trajectories.push_back(mng.setFile("rsc/demos/" + demo + "/trajectory_" + std::to_string(i) + ".csv").read<Eigen::MatrixXd>());
-        trajectories.back().rowwise() += offset.transpose();
+        trajectories.back().rowwise() += Eigen::Map<Eigen::Vector3d>(&offset[0]).transpose();
         static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().trajectory(trajectories.back(), i >= 4 ? "red" : "green");
     }
 
@@ -321,11 +328,11 @@ int main(int argc, char const* argv[])
 
         t += dt;
 
-        // if ((xDes - franka->framePosition("panda_joint8")).norm() <= 0.01 && enter) {
-        //     std::cout << "Activating DS" << std::endl;
-        //     controller->setExternalDynamics(true);
-        //     enter = false;
-        // }
+        if ((xDes - franka->framePosition("panda_joint8")).norm() <= 0.01 && enter) {
+            std::cout << "Activating DS" << std::endl;
+            controller->setExternalDynamics(true);
+            enter = false;
+        }
 
         prev = now;
         next += 1ms;

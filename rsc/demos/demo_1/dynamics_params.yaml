@@ -12,3 +12,5 @@ dynamics:
   approximator:
     num_neurons: 32
     num_layers: 3
+
+  offset: [0.5, -0.5, 0.5]

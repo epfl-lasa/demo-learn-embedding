@@ -41,7 +41,8 @@ optional = [
     "beautifulbullet",  # robotic simulator
     "zmqstream",  # stream across Python/C++
     "optitracklib",  # communicate with the optitrack system
-    "frankacontrol"  # control franka robot
+    "frankacontrol",  # control franka robot
+    "yamlcpp"
 ]
 
 required_bld = {

@@ -42,6 +42,9 @@
 // Stream
 #include <zmq_stream/Requester.hpp>
 
+// parse yaml
+#include <yaml-cpp/yaml.h>
+
 #include <chrono>
 #include <iostream>
 #include <thread>
@@ -70,13 +73,13 @@ struct ParamsConfig {
         // State dimension
         PARAM_SCALAR(size_t, nP, 7);
 
-        // Control/Input dimension
+        // Control/Input dimension (optimization torques)
         PARAM_SCALAR(size_t, nC, 7);
 
-        // Slack variable dimension
+        // Slack variable dimension (optimization slack)
         PARAM_SCALAR(size_t, nS, 6);
 
-        // derivative order
+        // derivative order (optimization joint acceleration)
         PARAM_SCALAR(size_t, oD, 2);
     };
 };
@@ -100,11 +103,11 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
         // position ds weights
         _pos
             .setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3))
-            .setDamping(1.0 * Eigen::MatrixXd::Identity(3, 3));
+            .setDamping(0.5 * Eigen::MatrixXd::Identity(3, 3));
 
         // orientation ds weights
-        _rot.setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3))
-            .setDamping(1.0 * Eigen::MatrixXd::Identity(3, 3));
+        _rot.setStiffness(2.0 * Eigen::MatrixXd::Identity(3, 3))
+            .setDamping(0.1 * Eigen::MatrixXd::Identity(3, 3));
 
         // external ds stream
         _external = false;
@@ -113,8 +116,14 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
 
     TaskDynamics& setReference(const SE3& x)
     {
-        _pos.setReference(R3(x._trans));
-        _rot.setReference(SO3(x._rot));
+        auto p = R3(x._trans);
+        p._v = x._v.head(3);
+        _pos.setReference(p);
+
+        auto r = SO3(x._rot);
+        r._v = x._v.tail(3);
+        _rot.setReference(r);
+
         return *this;
     }
 
@@ -127,10 +136,15 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
     void update(const SE3& x) override
     {
         // position ds
-        _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(x._trans, 3) : _pos(R3(x._trans));
+        auto p = R3(x._trans);
+        p._v = x._v.head(3);
+        _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(x._trans, 3) : _pos(p);
 
         // orientation ds
-        _u.tail(3) = _rot(SO3(x._rot));
+        // auto r = SO3(x._rot);
+        // r._v = x._v.tail(3);
+        // _u.tail(3) = _rot(r);
+        _u.tail(3).setZero();
     }
 
 protected:
@@ -159,36 +173,43 @@ struct IKController : public control::MultiBodyCtr {
     IKController(const std::shared_ptr<FrankaModel>& model, const SE3& target_pose) : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE)
     {
         // integration step
-        _dt = 0.03;
+        _dt = 0.01;
 
         // reference frame for inverse kinematics
         _frame = model->_frame;
 
         // configuration target
-        R7 state, target_state;
-        state._x = model->state();
-        target_state._x = (model->positionUpper() - model->positionLower()) * 0.5 + model->positionLower();
+        R7 state(model->state()), target_state((model->positionUpper() - model->positionLower()) * 0.5 + model->positionLower());
+        state._v = model->velocity();
+        target_state._v.setZero();
         _config
-            .setStiffness(1.0 * Eigen::MatrixXd::Identity(7, 7))
+            .setStiffness(2.0 * Eigen::MatrixXd::Identity(7, 7))
+            .setDamping(0.1 * Eigen::MatrixXd::Identity(7, 7))
             .setReference(target_state)
             .update(state);
 
+        // torque reference
+        _gravity = model->gravityVector(state._x);
+
         // task target
-        SE3 pose(model->frameOrientation(), model->framePosition());
+        SE3 pose(model->framePose(state._x, _frame));
+        pose._v = model->frameVelocity(state._x, state._v, _frame);
         _task
             .setReference(target_pose)
             .update(pose);
 
         // inverse kinematics
-        Eigen::MatrixXd Q = 1.0 * Eigen::MatrixXd::Identity(7, 7),
-                        R = 1.0 * Eigen::MatrixXd::Identity(7, 7),
-                        S = 10.0 * Eigen::MatrixXd::Identity(6, 6);
+        Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(7, 7), R = Eigen::MatrixXd::Zero(7, 7), S = Eigen::MatrixXd::Zero(6, 6);
+        Q.diagonal() << 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0;
+        R.diagonal() << 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1;
+        S.diagonal() << 1.0e6, 1.0e6, 1.0e6, 1.0e6, 1.0e6, 1.0e6;
 
         _id
             .setModel(model)
             .stateCost(Q)
             .inputCost(R)
-            // .stateReference(Q, _config)
+            .inputReference(_gravity)
+            // .stateReference(_config.output())
             .slackCost(S)
             .modelConstraint()
             .inverseDynamics(_task.output())
@@ -197,14 +218,6 @@ struct IKController : public control::MultiBodyCtr {
             .accelerationLimits()
             .effortLimits()
             .init(state);
-
-        // joints controller
-        Eigen::MatrixXd K = Eigen::MatrixXd::Zero(7, 7), D = Eigen::MatrixXd::Zero(7, 7);
-        K.diagonal() << 700.0, 700.0, 700.0, 700.0, 500.0, 500.0, 50.0;
-        D.diagonal() << 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 1.0;
-        _ctr
-            .setStiffness(K)
-            .setDamping(D);
     }
 
     IKController& setTarget(const SE3& target_pose)
@@ -226,23 +239,22 @@ struct IKController : public control::MultiBodyCtr {
         state._v = body.velocity();
         _config.update(state);
 
+        // torque reference
+        _gravity = body.nonLinearEffects(state._x, state._v);
+
         // task
         SE3 pose(body.framePose(state._x, _frame));
         pose._v = body.frameVelocity(state._x, state._v, _frame);
         _task.update(pose);
-
-        // id
-        auto sol = _id(state);
-        auto ref = R7(state._x + _dt * _id(state).segment(0, 7));
-        ref._v = Eigen::VectorXd::Zero(7);
-
-        // return _ctr.setReference(ref).action(state) + body.gravityVector(state._x);
 
         return _id(state).segment(7, 7);
     }
 
     // step
     double _dt;
+
+    // torque reference
+    Eigen::Matrix<double, 7, 1> _gravity;
 
     // configuration space ds
     controllers::Feedback<ParamsConfig, R7> _config;
@@ -252,9 +264,6 @@ struct IKController : public control::MultiBodyCtr {
 
     // inverse dynamics
     controllers::QuadraticControl<ParamsConfig, FrankaModel> _id;
-
-    // joint space controller
-    controllers::Feedback<ParamsConfig, R7> _ctr;
 };
 
 int main(int argc, char const* argv[])
@@ -274,18 +283,17 @@ int main(int argc, char const* argv[])
     franka->setState(state_ref);
 
     // trajectory
-    std::string demo = "demo_2";
+    std::string demo = (argc > 1) ? "demo_" + std::string(argv[1]) : "demo_1";
+    YAML::Node config = YAML::LoadFile("rsc/demos/" + demo + "/dynamics_params.yaml");
+    auto offset = config["dynamics"]["offset"].as<std::vector<double>>();
+
     FileManager mng;
-    Eigen::VectorXd offset = mng.setFile("rsc/demos/" + demo + "/offset.csv").read<Eigen::MatrixXd>();
     std::vector<Eigen::MatrixXd> trajectories;
-    for (size_t i = 1; i <= 7; i++) {
+    for (size_t i = 1; i <= 1; i++) {
         trajectories.push_back(mng.setFile("rsc/demos/" + demo + "/trajectory_" + std::to_string(i) + ".csv").read<Eigen::MatrixXd>());
-        trajectories.back().rowwise() += offset.transpose();
+        trajectories.back().rowwise() += Eigen::Map<Eigen::Vector3d>(&offset[0]).transpose();
         static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().trajectory(trajectories.back(), i >= 4 ? "red" : "green");
     }
-
-    // Eigen::MatrixXd traj = mng.setFile("rsc/demos/" + demo + "/trajectory_1.csv").read<Eigen::MatrixXd>();
-    // traj.rowwise() += offset.transpose();
 
     // task space target
     Eigen::Vector3d xDes = trajectories[0].row(0);

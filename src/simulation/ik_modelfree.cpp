@@ -42,6 +42,9 @@
 // Stream
 #include <zmq_stream/Requester.hpp>
 
+// parse yaml
+#include <yaml-cpp/yaml.h>
+
 #include <chrono>
 #include <iostream>
 #include <thread>
@@ -76,7 +79,7 @@ struct ParamsConfig {
         // Slack variable dimension
         PARAM_SCALAR(size_t, nS, 6);
 
-        // derivative order
+        // derivative order (optimization joint velocity)
         PARAM_SCALAR(size_t, oD, 1);
     };
 };
@@ -98,10 +101,12 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
         _u.setZero(_d);
 
         // position ds weights
-        _pos.setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3));
+        _pos
+            .setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3));
 
         // orientation ds weights
-        _rot.setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3));
+        _rot
+            .setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3));
 
         // external ds stream
         _external = false;
@@ -127,7 +132,8 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
         _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(x._trans, 3) : _pos(R3(x._trans));
 
         // orientation ds
-        _u.tail(3) = _rot(SO3(x._rot)); // _u.tail(3).setZero();
+        // _u.tail(3) = _rot(SO3(x._rot));
+        _u.tail(3).setZero();
     }
 
 protected:
@@ -263,13 +269,15 @@ int main(int argc, char const* argv[])
     franka->setState(state_ref);
 
     // trajectory
-    std::string demo = "demo_2";
+    std::string demo = (argc > 1) ? "demo_" + std::string(argv[1]) : "demo_1";
+    YAML::Node config = YAML::LoadFile("rsc/demos/" + demo + "/dynamics_params.yaml");
+    auto offset = config["dynamics"]["offset"].as<std::vector<double>>();
+
     FileManager mng;
-    Eigen::VectorXd offset = mng.setFile("rsc/demos/" + demo + "/offset.csv").read<Eigen::MatrixXd>();
     std::vector<Eigen::MatrixXd> trajectories;
     for (size_t i = 1; i <= 1; i++) {
         trajectories.push_back(mng.setFile("rsc/demos/" + demo + "/trajectory_" + std::to_string(i) + ".csv").read<Eigen::MatrixXd>());
-        trajectories.back().rowwise() += offset.transpose();
+        trajectories.back().rowwise() += Eigen::Map<Eigen::Vector3d>(&offset[0]).transpose();
         static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().trajectory(trajectories.back(), i >= 4 ? "red" : "green");
     }
 
