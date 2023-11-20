@@ -150,7 +150,7 @@ protected:
 
 struct FrankaModel : public bodies::MultiBody {
 public:
-    FrankaModel() : bodies::MultiBody("rsc/franka/panda.urdf"), _frame("panda_joint_8"), _reference(pinocchio::WORLD) {}
+    FrankaModel() : bodies::MultiBody("rsc/franka/panda.urdf"), _frame("panda_joint_8"), _reference(pinocchio::LOCAL_WORLD_ALIGNED) {}
 
     Eigen::MatrixXd jacobian(const Eigen::VectorXd& q) { return static_cast<bodies::MultiBody*>(this)->jacobian(q, _frame, _reference); }
 
@@ -177,7 +177,7 @@ struct IKController : public control::MultiBodyCtr {
             .update(state);
 
         // task target
-        SE3 pose(model->frameOrientation(), model->framePosition());
+        SE3 pose(model->framePose());
         _task
             .setReference(target_pose)
             .update(pose);
@@ -323,11 +323,11 @@ int main(int argc, char const* argv[])
 
         t += dt;
 
-        if ((xDes - franka->framePosition("panda_joint8")).norm() <= 0.01 && enter) {
-            std::cout << "Activating DS" << std::endl;
-            controller->setExternalDynamics(true);
-            enter = false;
-        }
+        // if ((xDes - franka->framePosition("panda_joint8")).norm() <= 0.01 && enter) {
+        //     std::cout << "Activating DS" << std::endl;
+        //     controller->setExternalDynamics(true);
+        //     enter = false;
+        // }
 
         // std::cout << (xDes - franka->framePosition("panda_link7")).norm() << std::endl;
 

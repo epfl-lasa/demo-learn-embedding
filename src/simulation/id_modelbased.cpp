@@ -101,7 +101,7 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
         _u.setZero(_d);
 
         // position ds weights
-        double k = 0.0, d = 2.0 * std::sqrt(k);
+        double k = 1.0, d = 2.0 * std::sqrt(k);
         _pos
             .setStiffness(k * Eigen::MatrixXd::Identity(3, 3))
             .setDamping(d * Eigen::MatrixXd::Identity(3, 3));
@@ -162,7 +162,7 @@ protected:
 
 struct FrankaModel : public bodies::MultiBody {
 public:
-    FrankaModel() : bodies::MultiBody("rsc/franka/panda.urdf"), _frame("panda_joint_8"), _reference(pinocchio::WORLD) {}
+    FrankaModel() : bodies::MultiBody("rsc/franka/panda.urdf"), _frame("panda_joint_8"), _reference(pinocchio::LOCAL_WORLD_ALIGNED) {}
 
     Eigen::MatrixXd jacobian(const Eigen::VectorXd& q)
     {
@@ -172,6 +172,16 @@ public:
     Eigen::MatrixXd jacobianDerivative(const Eigen::VectorXd& q, const Eigen::VectorXd& dq)
     {
         return static_cast<bodies::MultiBody*>(this)->jacobianDerivative(q, dq, _frame, _reference);
+    }
+
+    Eigen::Matrix<double, 6, 1> framePose(const Eigen::VectorXd& q)
+    {
+        return static_cast<bodies::MultiBody*>(this)->framePose(q, _frame);
+    }
+
+    Eigen::Matrix<double, 6, 1> frameVelocity(const Eigen::VectorXd& q, const Eigen::VectorXd& dq)
+    {
+        return static_cast<bodies::MultiBody*>(this)->frameVelocity(q, dq, _frame, _reference);
     }
 
     std::string _frame;
@@ -186,6 +196,7 @@ struct IKController : public control::MultiBodyCtr {
 
         // reference frame for inverse kinematics
         _frame = model->_frame;
+        _model = model;
 
         // configuration target
         R7 state(model->state()), target_state((model->positionUpper() - model->positionLower()) * 0.5 + model->positionLower());
@@ -201,8 +212,8 @@ struct IKController : public control::MultiBodyCtr {
         _gravity = model->gravityVector(state._x);
 
         // task target
-        SE3 pose(model->framePose(state._x, _frame));
-        pose._v = model->frameVelocity(state._x, state._v, _frame);
+        SE3 pose(model->framePose(state._x));
+        pose._v = model->frameVelocity(state._x, state._v);
         _task
             .setReference(target_pose)
             .update(pose);
@@ -211,7 +222,7 @@ struct IKController : public control::MultiBodyCtr {
         Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(7, 7), R = Eigen::MatrixXd::Zero(7, 7), S = Eigen::MatrixXd::Zero(6, 6);
         Q.diagonal() << 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0;
         R.diagonal() << 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1;
-        S.diagonal() << 1.0e6, 1.0e6, 1.0e6, 1.0e6, 1.0e6, 1.0e6;
+        S.diagonal() << 90.0, 90.0, 90.0, 90.0, 90.0, 90.0;
 
         _id
             .setModel(model)
@@ -252,15 +263,11 @@ struct IKController : public control::MultiBodyCtr {
         _gravity = body.nonLinearEffects(state._x, state._v);
 
         // task
-        SE3 pose(body.framePose(state._x, _frame));
-        pose._v = body.frameVelocity(state._x, state._v, _frame);
+        SE3 pose(_model->framePose(state._x));
+        pose._v = _model->frameVelocity(state._x, state._v);
         _task.update(pose);
 
-        auto sol = _id(state);
-        // auto ref = R7(state._x + _dt * state._v + 0.5 * _dt * _dt * sol.segment(0, 7));
-
-        // return 900 * (ref._x - state._x) - 10 * state._v + body.nonLinearEffects(state._x, state._v);
-        return sol.segment(7, 7);
+        return _id(state).segment(7, 7);
     }
 
     // step
@@ -268,6 +275,9 @@ struct IKController : public control::MultiBodyCtr {
 
     // torque reference
     Eigen::Matrix<double, 7, 1> _gravity;
+
+    // model
+    std::shared_ptr<FrankaModel> _model;
 
     // configuration space ds
     controllers::Feedback<ParamsConfig, R7> _config;
@@ -339,6 +349,21 @@ int main(int argc, char const* argv[])
 
     bool enter = true;
 
+    // std::cout << "local" << std::endl;
+    // std::cout << static_cast<bodies::MultiBodyPtr>(franka)->jacobian("", pinocchio::LOCAL) << std::endl;
+
+    // std::cout << "world" << std::endl;
+    // std::cout << static_cast<bodies::MultiBodyPtr>(franka)->jacobian("", pinocchio::WORLD) << std::endl;
+
+    // std::cout << "local aligned" << std::endl;
+    // std::cout << static_cast<bodies::MultiBodyPtr>(franka)->jacobian("", pinocchio::LOCAL_WORLD_ALIGNED) << std::endl;
+
+    // std::cout << static_cast<bodies::MultiBodyPtr>(franka)->pose().transpose() << std::endl;
+
+    // pinocchio::SE3 ref_pose(oDes, xDes);
+
+    // std::cout << pinocchio::log6(ref_pose).toVector().transpose() << std::endl;
+
     while (t <= T) {
         auto now = steady_clock::now();
 
@@ -347,11 +372,11 @@ int main(int argc, char const* argv[])
 
         t += dt;
 
-        if ((xDes - franka->framePosition("panda_joint8")).norm() <= 0.01 && enter) {
-            std::cout << "Activating DS" << std::endl;
-            controller->setExternalDynamics(true);
-            enter = false;
-        }
+        // if ((xDes - franka->framePosition("panda_joint8")).norm() <= 0.01 && enter) {
+        //     std::cout << "Activating DS" << std::endl;
+        //     controller->setExternalDynamics(true);
+        //     enter = false;
+        // }
 
         prev = now;
         next += 1ms;
