@@ -62,7 +62,7 @@ using SO3 = spatial::SO<3, true>;
 
 struct ParamsConfig {
     struct controller : public defaults::controller {
-        PARAM_SCALAR(double, dt, 0.01);
+        PARAM_SCALAR(double, dt, 1.0e-2);
     };
 
     struct feedback : public defaults::feedback {
@@ -86,7 +86,7 @@ struct ParamsConfig {
 
 struct ParamsTask {
     struct controller : public defaults::controller {
-        PARAM_SCALAR(double, dt, 0.01);
+        PARAM_SCALAR(double, dt, 1.0e-2);
     };
 
     struct feedback : public defaults::feedback {
@@ -101,7 +101,7 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
         _u.setZero(_d);
 
         // position ds weights
-        double k = 1.0, d = 2.0 * std::sqrt(k);
+        double k = 3.0, d = 2.0 * std::sqrt(k);
         _pos
             .setStiffness(k * Eigen::MatrixXd::Identity(3, 3))
             .setDamping(d * Eigen::MatrixXd::Identity(3, 3));
@@ -199,12 +199,13 @@ struct IKController : public control::MultiBodyCtr {
         _model = model;
 
         // configuration target
+        double k = 1.0, d = 2.0 * std::sqrt(k);
         R7 state(model->state()), target_state((model->positionUpper() - model->positionLower()) * 0.5 + model->positionLower());
         state._v = model->velocity();
         target_state._v.setZero();
         _config
-            .setStiffness(2.0 * Eigen::MatrixXd::Identity(7, 7))
-            .setDamping(0.1 * Eigen::MatrixXd::Identity(7, 7))
+            .setStiffness(k * Eigen::MatrixXd::Identity(7, 7))
+            .setDamping(d * Eigen::MatrixXd::Identity(7, 7))
             .setReference(target_state)
             .update(state);
 
@@ -222,14 +223,14 @@ struct IKController : public control::MultiBodyCtr {
         Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(7, 7), R = Eigen::MatrixXd::Zero(7, 7), S = Eigen::MatrixXd::Zero(6, 6);
         Q.diagonal() << 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0;
         R.diagonal() << 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1;
-        S.diagonal() << 90.0, 90.0, 90.0, 90.0, 90.0, 90.0;
+        S.diagonal() << 70.0, 70.0, 70.0, 70.0, 70.0, 70.0;
 
         _id
             .setModel(model)
             .stateCost(Q)
             .inputCost(R)
             .inputReference(_gravity)
-            // .stateReference(_config.output())
+            .stateReference(_config.output())
             .slackCost(S)
             .modelConstraint()
             .inverseDynamics(_task.output())
@@ -260,7 +261,8 @@ struct IKController : public control::MultiBodyCtr {
         _config.update(state);
 
         // torque reference
-        _gravity = body.nonLinearEffects(state._x, state._v);
+        // _gravity = body.nonLinearEffects(state._x, state._v);
+        _gravity = body.gravityVector(state._x);
 
         // task
         SE3 pose(_model->framePose(state._x));
