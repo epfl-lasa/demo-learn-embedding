@@ -1,16 +1,30 @@
-dynamics:
-  dimension: 3
+dimension: 3
+offset: [0.5, -0.5, 0.5]
 
-  order: 1
+first_order:
+  name: first_2
 
-  stiffness:
-    type: full
+  embedding:
+    type: network
+    params: [32, 3] # for a network number of neurons per layer and number of layers
 
-  dissipation:
-    type: full
+  stiffness: full
 
-  approximator:
-    num_neurons: 32
-    num_layers: 3
+  options:
+    obstacle_avoidance: false
 
-  offset: [0.5, -0.5, 0.5]
+second_order:
+  name: second_2
+
+  embedding:
+    type: network
+    params: [64, 2] # for a network number of neurons per layer and number of layers
+
+  stiffness: full
+
+  dissipation: full
+
+  options:
+    obstacle_avoidance: false
+    directional_dissipation: false
+    exponential_dissipation: false
