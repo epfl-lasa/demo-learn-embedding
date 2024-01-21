@@ -150,7 +150,7 @@ struct OperationSpaceController : public control::MultiBodyCtr
 
         // damping operation space control
         _damping.setZero();
-        _damping.diagonal() << 1.0, 1.0, 1.0, 1.0, 1.0, 1.0;
+        _damping.diagonal() << 0.01, 0.01, 0.01, 0.01, 0.01, 0.01;
 
         // task target
         SE3 pose(model->framePose());
@@ -178,11 +178,7 @@ struct OperationSpaceController : public control::MultiBodyCtr
         SE3 x(_model->framePose(q));
         Eigen::VectorXd v = _model->frameVelocity(q, body.velocity());
 
-        // task
-        SE3 pose(body.framePose(_frame));
-        _task.update(pose);
-
-        return _model->jacobian(q) * (_damping * (_task(x) - v));
+        return _model->jacobian(q).transpose() * (_damping * (_task(x) - v));
     }
 
     // step
@@ -240,7 +236,7 @@ int main(int argc, char const *argv[])
 
     // Set controlled robot
     (*franka)
-        // .activateGravity()
+        .activateGravity()
         .addControllers(controller);
 
     // Add robots and run simulation
