@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="panda_visual">
+    <xacro:macro name="visual" params="xyz:='1.57079632679 0 0' rpy:='0 0 0' mesh:=''">
+        <visual>
+            <origin xyz="${xyz}" rpy="${rpy}"/>
+            <geometry>
+                <mesh filename="meshes/visual/${mesh}.dae"/>
+            </geometry>
+        </visual>
+    </xacro:macro>
+</robot>

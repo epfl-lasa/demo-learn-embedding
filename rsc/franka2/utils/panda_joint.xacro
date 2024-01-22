@@ -1,0 +1,21 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="panda_joint">
+    <xacro:macro name="joint" params="name type:='fixed' parent child rpy xyz soft_lower_limit:='' soft_upper_limit:='' limit_effort:='' limit_lower:='' limit_upper:='' limit_velocity:=''">
+        <joint name="${ns}_${name}" type="${type}">
+            <xacro:if value="${type == 'revolute'}">
+                <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="${soft_lower_limit}" soft_upper_limit="${soft_upper_limit}"/>
+            </xacro:if>
+            <origin rpy="${rpy}" xyz="${xyz}"/>
+            <parent link="${ns}_${parent}"/>
+            <child link="${ns}_${child}"/>
+            <xacro:if value="${type == 'revolute'}">
+                <axis xyz="0 0 1"/>
+                <limit effort="${limit_effort}" lower="${limit_lower}" upper="${limit_upper}" velocity="${limit_velocity}"/>
+                <dynamics damping="1.0"/>
+            </xacro:if>
+            <xacro:if value="${type == 'fixed'}">
+                <axis xyz="0 0 0"/>
+            </xacro:if>
+        </joint>
+    </xacro:macro>
+</robot>

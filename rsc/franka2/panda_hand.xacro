@@ -1,0 +1,67 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="panda">
+    <!-- Includes -->
+    <xacro:include filename="utils/panda_link.xacro" />
+    <xacro:include filename="utils/panda_joint.xacro" />
+    <xacro:include filename="utils/panda_transmission.xacro" />
+    <xacro:include filename="utils/panda_gazebo.xacro" />
+
+    <!-- ns: Namespace of the panda. Serves to differentiate between arms in case of multiple instances. -->
+    <xacro:macro name="panda_hand" params="ns:='panda' connected_to:='' xyz:='0 0 0' rpy:='0 0 0' visual:='true' collision:='true' inertial:='true' hardware_interface:=EffortJointInterface">
+        <!-- Conditional for world connection in simulation-->
+        <xacro:unless value="${connected_to == ''}">
+            <joint name="${ns}_hand_joint" type="fixed">
+                <parent link="${connected_to}"/>
+                <child link="${ns}_hand"/>
+                <origin xyz="${xyz}" rpy="${rpy}"/> <!--0.107-->
+            </joint>
+        </xacro:unless>
+
+        <!-- Links  -->
+        <xacro:link name="hand" visual="${visual}" collision="${collision}" inertial="${inertial}">
+            <xacro:visual xyz="${xyz}" rpy="0 0 0" mesh="hand" />
+            <xacro:collision xyz="${xyz}" rpy="0 0 0" mesh="hand" />
+            <xacro:inertial mass="0.73" xyz="0 0.0015244 0.0275912" rpy="0 0 0" ixx="0.00278560230025" ixy="0.0" ixz="0.0" iyy="0.000400033405336" iyz="0.0" izz="0.00256378041832" />
+        </xacro:link>
+
+        <xacro:link name="leftfinger" visual="${visual}" collision="${collision}" inertial="${inertial}">
+            <xacro:visual xyz="${xyz}" rpy="0 0 0" mesh="finger" />
+            <xacro:collision xyz="${xyz}" rpy="0 0 0" mesh="finger" />
+            <xacro:inertial mass="0.10" xyz="0 0.0145644 0.0227941" rpy="0 0 0" ixx="3.01220925051e-05" ixy="0.0" ixz="0.0" iyy="2.95873808038e-05" iyz="0.0" izz="6.95125211657e-06" />
+        </xacro:link>
+
+        <xacro:link name="rightfinger" visual="${visual}" collision="${collision}" inertial="${inertial}">
+            <xacro:visual xyz="0 0 0" rpy="0 0 ${pi}" mesh="finger" />
+            <xacro:collision xyz="0 0 0" rpy="0 0 ${pi}" mesh="finger" />
+            <xacro:inertial mass="0.10" xyz="0 0.0145644 0.0227941" rpy="0 0 ${pi}" ixx="3.01220925051e-05" ixy="0.0" ixz="0.0" iyy="2.95873808038e-05" iyz="0.0" izz="6.95125211657e-06" />
+        </xacro:link>
+
+        <!-- Joints -->
+        <joint name="${ns}_finger_joint1" type="prismatic">
+            <parent link="${ns}_hand"/>
+            <child link="${ns}_leftfinger"/>
+            <origin xyz="0 0 0.0584" rpy="0 0 0"/>
+            <axis xyz="0 1 0"/>
+            <limit effort="20" lower="-0.001" upper="0.04" velocity="0.3"/>
+            <dynamics damping="0.5"/>
+        </joint>
+
+        <joint name="${ns}_finger_joint2" type="prismatic">
+            <parent link="${ns}_hand"/>
+            <child link="${ns}_rightfinger"/>
+            <origin xyz="0 0 0.0584" rpy="0 0 0"/>
+            <axis xyz="0 -1 0"/>
+            <limit effort="20" lower="-0.001" upper="0.04" velocity="0.3"/>
+            <dynamics damping="0.5"/>
+        </joint>
+
+        <!-- Transmissions -->
+        <xacro:transmission name="finger_tran1" joint="finger_joint1" motor="finger_motor1" hardware_interface="${hardware_interface}" />
+        <xacro:transmission name="finger_tran2" joint="finger_joint2" motor="finger_motor2" hardware_interface="${hardware_interface}" />
+
+        <!-- Gazebo -->
+        <xacro:gazebo name="hand" color="Grey" />
+        <xacro:gazebo name="leftfinger" color="Grey" />
+        <xacro:gazebo name="rightfinger" color="Grey" />
+    </xacro:macro>
+</robot>

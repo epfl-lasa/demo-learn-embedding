@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- Add color and friction to each link -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="panda_gazebo">
+    <xacro:macro name="gazebo" params="name color">
+        <gazebo reference="${ns}_${name}">
+            <material>Gazebo/${color}</material>
+            <mu1>0.2</mu1>
+            <mu2>0.2</mu2>
+        </gazebo>
+    </xacro:macro>
+</robot>

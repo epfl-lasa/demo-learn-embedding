@@ -1,0 +1,17 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- Add transmission elements -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="panda_transmission">
+    <!-- Transmission -->
+    <xacro:macro name="transmission" params="name joint motor hardware_interface">
+        <transmission name="${ns}_${name}">
+            <type>transmission_interface/SimpleTransmission</type>
+            <joint name="${ns}_${joint}">
+                <hardwareInterface>hardware_interface/${hardware_interface}</hardwareInterface>
+            </joint>
+            <actuator name="${ns}_${motor}">
+                <hardwareInterface>hardware_interface/${hardware_interface}</hardwareInterface>
+                <mechanicalReduction>1</mechanicalReduction>
+            </actuator>
+        </transmission>
+    </xacro:macro>
+</robot>

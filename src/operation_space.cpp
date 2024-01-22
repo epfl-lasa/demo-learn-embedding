@@ -29,12 +29,12 @@
 #include <beautiful_bullet/graphics/MagnumGraphics.hpp>
 
 // Spaces
+#include <control_lib/spatial/R.hpp>
 #include <control_lib/spatial/SE.hpp>
 #include <control_lib/spatial/SO.hpp>
 
 // Controllers
 #include <control_lib/controllers/Feedback.hpp>
-#include <control_lib/controllers/QuadraticControl.hpp>
 
 // Reading/Writing Files
 #include <utils_lib/FileManager.hpp>
@@ -59,32 +59,27 @@ using R3 = spatial::R<3>;
 using SE3 = spatial::SE<3>;
 using SO3 = spatial::SO<3, true>;
 
-struct ParamsTask
-{
-    struct controller : public defaults::controller
-    {
-        PARAM_SCALAR(double, dt, 1.0);
+struct ParamsTask {
+    struct controller : public defaults::controller {
+        PARAM_SCALAR(double, dt, 0.01);
     };
 
-    struct feedback : public defaults::feedback
-    {
+    struct feedback : public defaults::feedback {
         PARAM_SCALAR(size_t, d, 3);
     };
 };
 
-struct FrankaModel : public bodies::MultiBody
-{
+struct FrankaModel : public bodies::MultiBody {
 public:
     FrankaModel() : bodies::MultiBody("rsc/franka/panda.urdf"), _frame("panda_joint_8"), _reference(pinocchio::LOCAL_WORLD_ALIGNED) {}
 
-    Eigen::MatrixXd jacobian(const Eigen::VectorXd &q) { return static_cast<bodies::MultiBody *>(this)->jacobian(q, _frame, _reference); }
+    Eigen::MatrixXd jacobian(const Eigen::VectorXd& q) { return static_cast<bodies::MultiBody*>(this)->jacobian(q, _frame, _reference); }
 
     std::string _frame;
     pinocchio::ReferenceFrame _reference;
 };
 
-struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3>
-{
+struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
     TaskDynamics()
     {
         _d = SE3::dimension();
@@ -103,27 +98,27 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3>
         _requester.configure("localhost", "5511");
     }
 
-    TaskDynamics &setReference(const SE3 &x)
+    TaskDynamics& setReference(const SE3& x)
     {
         _pos.setReference(R3(x._trans));
         _rot.setReference(SO3(x._rot));
         return *this;
     }
 
-    TaskDynamics &setExternal(const bool &value)
+    TaskDynamics& setExternal(const bool& value)
     {
         _external = value;
         return *this;
     }
 
-    void update(const SE3 &x) override
+    void update(const SE3& x) override
     {
         // position ds
         _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(x._trans, 3) : _pos(R3(x._trans));
 
         // orientation ds
-        // _u.tail(3) = _rot(SO3(x._rot));
-        _u.tail(3).setZero();
+        _u.tail(3) = _rot(SO3(x._rot));
+        // _u.tail(3).setZero();
     }
 
 protected:
@@ -138,9 +133,8 @@ protected:
     Requester _requester;
 };
 
-struct OperationSpaceController : public control::MultiBodyCtr
-{
-    OperationSpaceController(const std::shared_ptr<FrankaModel> &model, const SE3 &target_pose) : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE), _model(model)
+struct OperationSpaceController : public control::MultiBodyCtr {
+    OperationSpaceController(const std::shared_ptr<FrankaModel>& model, const SE3& target_pose) : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE), _model(model)
     {
         // integration step
         _dt = 0.03;
@@ -150,7 +144,7 @@ struct OperationSpaceController : public control::MultiBodyCtr
 
         // damping operation space control
         _damping.setZero();
-        _damping.diagonal() << 0.01, 0.01, 0.01, 0.01, 0.01, 0.01;
+        _damping.diagonal() << 5.0, 5.0, 5.0, 5.0, 5.0, 5.0;
 
         // task target
         SE3 pose(model->framePose());
@@ -159,19 +153,19 @@ struct OperationSpaceController : public control::MultiBodyCtr
             .update(pose);
     }
 
-    OperationSpaceController &setTarget(const SE3 &target_pose)
+    OperationSpaceController& setTarget(const SE3& target_pose)
     {
         _task.setReference(target_pose);
         return *this;
     }
 
-    OperationSpaceController &setExternalDynamics(const bool &value)
+    OperationSpaceController& setExternalDynamics(const bool& value)
     {
         _task.setExternal(value);
         return *this;
     }
 
-    Eigen::VectorXd action(bodies::MultiBody &body) override
+    Eigen::VectorXd action(bodies::MultiBody& body) override
     {
         // state
         Eigen::VectorXd q = body.state();
@@ -194,7 +188,7 @@ struct OperationSpaceController : public control::MultiBodyCtr
     Eigen::Matrix<double, 6, 6> _damping;
 };
 
-int main(int argc, char const *argv[])
+int main(int argc, char const* argv[])
 {
     // Create simulator
     Simulator simulator;
@@ -217,19 +211,21 @@ int main(int argc, char const *argv[])
 
     FileManager mng;
     std::vector<Eigen::MatrixXd> trajectories;
-    for (size_t i = 1; i <= 1; i++)
-    {
+    for (size_t i = 1; i <= 1; i++) {
         trajectories.push_back(mng.setFile("rsc/demos/" + demo + "/trajectory_" + std::to_string(i) + ".csv").read<Eigen::MatrixXd>());
         trajectories.back().rowwise() += Eigen::Map<Eigen::Vector3d>(&offset[0]).transpose();
-        static_cast<graphics::MagnumGraphics &>(simulator.graphics()).app().trajectory(trajectories.back(), i >= 4 ? "red" : "green");
+        static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().trajectory(trajectories.back(), i >= 4 ? "red" : "green");
     }
 
     // Eigen::MatrixXd traj = mng.setFile("rsc/demos/" + demo + "/trajectory_1.csv").read<Eigen::MatrixXd>();
     // traj.rowwise() += offset.transpose();
 
     // task space target
-    Eigen::Vector3d xDes = trajectories[0].row(0);
-    Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
+    // Eigen::Vector3d xDes = trajectories[0].row(0);
+    // Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
+    Eigen::Vector3d xDes(0.683783, 0.308249, 0.185577);
+    Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.922046, 0.377679, 0.0846751, 0.34527, -0.901452, 0.261066, 0.17493, -0.211479, -0.9616).finished();
+
     SE3 tDes(oDes, xDes);
 
     auto controller = std::make_shared<OperationSpaceController>(franka, tDes);
@@ -258,8 +254,7 @@ int main(int argc, char const *argv[])
     bool enter = true;
     auto limits_up = franka->positionUpper(), limits_down = franka->positionLower();
 
-    while (t <= T)
-    {
+    while (t <= T) {
         auto now = steady_clock::now();
 
         if (!simulator.step(size_t(t / dt)))
@@ -267,12 +262,11 @@ int main(int argc, char const *argv[])
 
         t += dt;
 
-        if ((xDes - franka->framePosition("panda_joint8")).norm() <= 0.01 && enter)
-        {
-            std::cout << "Activating DS" << std::endl;
-            controller->setExternalDynamics(true);
-            enter = false;
-        }
+        // if ((xDes - franka->framePosition("panda_joint8")).norm() <= 0.01 && enter) {
+        //     std::cout << "Activating DS" << std::endl;
+        //     controller->setExternalDynamics(true);
+        //     enter = false;
+        // }
 
         // std::cout << (xDes - franka->framePosition("panda_link7")).norm() << std::endl;
 

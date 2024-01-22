@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="panda">
+  <!-- Arguments -->
+  <xacro:arg name="load_hand" default="true"/>
+  <xacro:arg name="gazebo" default="false"/>
+
+  <xacro:arg name="robot_name" default="panda" />
+  <xacro:arg name="visual" default="false"/>
+  <xacro:arg name="collision" default="false"/>
+  <xacro:arg name="inertial" default="false"/>
+  <xacro:arg name="hardware_interface" default="EffortJointInterface"/>
+
+  <!-- Arm -->
+  <xacro:include filename="panda_arm.xacro"/>
+  <xacro:panda_arm ns="$(arg robot_name)" connected_to="world" xyz="0 0 0" rpy="0 0 0" visual="true" collision="true" inertial="true" hardware_interface="EffortJointInterface" />
+
+  <!-- Hand -->
+  <xacro:if value="$(arg load_hand)">
+    <xacro:include filename="panda_hand.xacro"/>
+    <xacro:panda_hand ns="$(arg robot_name)" connected_to="$(arg robot_name)_link7" xyz="0 0 0" rpy="0 0 ${-pi/4}" visual="true" collision="true" inertial="true" hardware_interface="EffortJointInterface"/>
+  </xacro:if>
+
+  <!-- Gazebo control plugin -->
+  <xacro:if value="$(arg gazebo)">
+    <gazebo>
+      <plugin name="gazebo_ros_control" filename="libgazebo_ros_control.so">
+        <robotNamespace>/panda</robotNamespace>
+        <robotSimType>franka_gazebo/SimGravityCompensation</robotSimType>
+      </plugin>
+    </gazebo>
+  </xacro:if>
+</robot>

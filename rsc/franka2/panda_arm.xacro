@@ -1,0 +1,106 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="panda">
+    <!-- Includes -->
+    <xacro:include filename="utils/panda_link.xacro" />
+    <xacro:include filename="utils/panda_joint.xacro" />
+    <xacro:include filename="utils/panda_transmission.xacro" />
+    <xacro:include filename="utils/panda_gazebo.xacro" />
+
+    <!-- ns: Namespace of the panda. Serves to differentiate between arms in case of multiple instances. -->
+    <xacro:macro name="panda_arm" params="ns:='panda' connected_to:='' xyz:='0 0 0' rpy:='0 0 0' visual:='true' collision:='true' inertial:='true' hardware_interface:=EffortJointInterface">
+        <!-- Conditional for world connection in simulation-->
+        <xacro:unless value="${not connected_to}">
+            <link name="${connected_to}" />
+            <joint name="${ns}_joint_${connected_to}" type="fixed">
+                <parent link="${connected_to}"/>
+                <child link="${ns}_link0"/>
+                <origin rpy="${rpy}" xyz="${xyz}"/>
+            </joint>
+        </xacro:unless>
+
+        <!-- Links -->
+        <xacro:link name="link0" visual="${visual}" collision="${collision}" inertial="${inertial}">
+            <xacro:visual xyz="${xyz}" rpy="${rpy}" mesh="link0" />
+            <xacro:collision xyz="${xyz}" rpy="${rpy}" mesh="link0" />
+            <xacro:inertial mass="2.92" xyz="-0.025566 -2.88e-05 0.057332" rpy="0 0 0" ixx="0.00782229414331" ixy="-1.56191622996e-05" ixz="-0.00126005738123" iyy="0.0109027971813" iyz="1.08233858202e-05" izz="0.0102355503949" />
+        </xacro:link>
+
+        <xacro:link name="link1" visual="${visual}" collision="${collision}" inertial="${inertial}">
+            <xacro:visual xyz="${xyz}" rpy="${rpy}" mesh="link1" />
+            <xacro:collision xyz="${xyz}" rpy="${rpy}" mesh="link1" />
+            <xacro:inertial mass="2.74" xyz="0 -0.0324958 -0.0675818" rpy="0 0 0" ixx="0.0180416958283" ixy="0.0" ixz="0.0" iyy="0.0159136071891" iyz="0.0046758424612" izz="0.00620690827127" />
+        </xacro:link>
+
+        <xacro:link name="link2" visual="${visual}" collision="${collision}" inertial="${inertial}">
+            <xacro:visual xyz="${xyz}" rpy="${rpy}" mesh="link2" />
+            <xacro:collision xyz="${xyz}" rpy="${rpy}" mesh="link2" />
+            <xacro:inertial mass="2.74" xyz="0 -0.06861 0.0322285" rpy="0 0 0" ixx="0.0182856182281" ixy="0.0" ixz="0.0" iyy="0.00621358421175" iyz="-0.00472844221905" izz="0.0161514346309" />
+        </xacro:link>
+
+        <xacro:link name="link3" visual="${visual}" collision="${collision}" inertial="${inertial}">
+            <xacro:visual xyz="${xyz}" rpy="${rpy}" mesh="link3" />
+            <xacro:collision xyz="${xyz}" rpy="${rpy}" mesh="link3" />
+            <xacro:inertial mass="2.38" xyz="0.0469893 0.0316374 -0.031704" rpy="0 0 0" ixx="0.00771376630908" ixy="-0.00248490625138" ixz="-0.00332147581033" iyy="0.00989108008727" iyz="-0.00217796151484" izz="0.00811723558464" />
+        </xacro:link>
+
+        <xacro:link name="link4" visual="${visual}" collision="${collision}" inertial="${inertial}">
+            <xacro:visual xyz="${xyz}" rpy="${rpy}" mesh="link4" />
+            <xacro:collision xyz="${xyz}" rpy="${rpy}" mesh="link4" />
+            <xacro:inertial mass="2.38" xyz="-0.0360446 0.0336853 0.031882" rpy="0 0 0" ixx="0.00799663881132" ixy="0.00347095570217" ixz="-0.00241222942995" iyy="0.00825390705278" iyz="0.00235774044121" izz="0.0102515004345" />
+        </xacro:link>
+
+        <xacro:link name="link5" visual="${visual}" collision="${collision}" inertial="${inertial}">
+            <xacro:visual xyz="${xyz}" rpy="${rpy}" mesh="link5" />
+            <xacro:collision xyz="${xyz}" rpy="${rpy}" mesh="link5" />
+            <xacro:inertial mass="2.74" xyz="0 0.0610427 -0.104176" rpy="0 0 0" ixx="0.030371374513" ixy="6.50283587108e-07" ixz="-1.05129179916e-05" iyy="0.0288752887402" iyz="-0.00775653445787" izz="0.00444134056164" />
+        </xacro:link>
+
+        <xacro:link name="link6" visual="${visual}" collision="${collision}" inertial="${inertial}">
+            <xacro:visual xyz="${xyz}" rpy="${rpy}" mesh="link6" />
+            <xacro:collision xyz="${xyz}" rpy="${rpy}" mesh="link6" />
+            <xacro:inertial mass="1.55" xyz="0.0510509 0.009108 0.0106343" rpy="0 0 0" ixx="0.00303336450376" ixy="-0.000437276865508" ixz="0.000629257294877" iyy="0.00404479911567" iyz="0.000130472021025" izz="0.00558234286039" />
+        </xacro:link>
+
+        <xacro:link name="link7" visual="${visual}" collision="${collision}" inertial="${inertial}">
+            <xacro:visual xyz="${xyz}" rpy="${rpy}" mesh="link7" />
+            <xacro:collision xyz="${xyz}" rpy="${rpy}" mesh="link7" />
+            <xacro:inertial mass="0.54" xyz="0.0109695 0.0107965 0.0650411" rpy="0 0 0" ixx="0.000888868887021" ixy="-0.00012239074652" ixz="3.98699829666e-05" iyy="0.000888001373233" iyz="-9.33825115206e-05" izz="0.0007176834609" />
+        </xacro:link>
+
+        <!-- add default mass = 0, damping for prismatic joints and remove dummy link between arm and hand, visual rotation correction -->
+        <!-- <link name="${ns}_link8"/> -->
+
+        <!-- Joints -->
+        <xacro:joint name="joint1" type="revolute" soft_lower_limit="-2.8973" soft_upper_limit="2.8973" rpy="0 0 0" xyz="0 0 0.333" parent="link0" child="link1" limit_effort="87" limit_lower="-2.8973" limit_upper="2.8973" limit_velocity="2.1750"/>
+        <xacro:joint name="joint2" type="revolute" soft_lower_limit="-1.7628" soft_upper_limit="1.7628" rpy="${-pi/2} 0 0" xyz="0 0 0" parent="link1" child="link2" limit_effort="87" limit_lower="-1.7628" limit_upper="1.7628" limit_velocity="2.1750"/>
+        <xacro:joint name="joint3" type="revolute" soft_lower_limit="-2.8973" soft_upper_limit="2.8973" rpy="${pi/2} 0 0" xyz="0 -0.316 0" parent="link2" child="link3" limit_effort="87" limit_lower="-2.8973" limit_upper="2.8973" limit_velocity="2.1750"/>
+        <!-- soft_upper_limitr should be -0.0698, but that brakes simulation when initial position for this joint is 0.0 -->
+        <xacro:joint name="joint4" type="revolute" soft_lower_limit="-3.0718" soft_upper_limit="0.0698" rpy="${pi/2} 0 0" xyz="0.0825 0 0" parent="link3" child="link4" limit_effort="87" limit_lower="-3.0718" limit_upper="0.0698" limit_velocity="2.1750"/>
+        <xacro:joint name="joint5" type="revolute" soft_lower_limit="-2.8973" soft_upper_limit="2.8973" rpy="${-pi/2} 0 0" xyz="-0.0825 0.384 0" parent="link4" child="link5" limit_effort="12" limit_lower="-2.8973" limit_upper="2.8973" limit_velocity="2.6100"/>
+        <xacro:joint name="joint6" type="revolute" soft_lower_limit="-0.0175" soft_upper_limit="3.7525" rpy="${pi/2} 0 0" xyz="0 0 0" parent="link5" child="link6" limit_effort="12" limit_lower="-0.0175" limit_upper="3.7525" limit_velocity="2.6100"/>
+        <xacro:joint name="joint7" type="revolute" soft_lower_limit="-2.8973" soft_upper_limit="2.8973" rpy="${pi/2} 0 0" xyz="0.088 0 0" parent="link6" child="link7" limit_effort="12" limit_lower="-2.8973" limit_upper="2.8973" limit_velocity="2.6100"/>
+        <!-- <xacro:joint name="joint8" type="fixed" parent="link7" child="link8" rpy="0 0 0" xyz="0 0 0.107"/> -->
+
+        <!-- Transmissions -->
+        <xacro:transmission name="tran1" joint="joint1" motor="motor1" hardware_interface="${hardware_interface}" />
+        <xacro:transmission name="tran2" joint="joint2" motor="motor2" hardware_interface="${hardware_interface}" />
+        <xacro:transmission name="tran3" joint="joint3" motor="motor3" hardware_interface="${hardware_interface}" />
+        <xacro:transmission name="tran4" joint="joint4" motor="motor4" hardware_interface="${hardware_interface}" />
+        <xacro:transmission name="tran5" joint="joint5" motor="motor5" hardware_interface="${hardware_interface}" />
+        <xacro:transmission name="tran6" joint="joint6" motor="motor6" hardware_interface="${hardware_interface}" />
+        <xacro:transmission name="tran7" joint="joint7" motor="motor7" hardware_interface="${hardware_interface}" />
+
+        <!-- Gazebo -->
+        <xacro:gazebo name="link0" color="White" />
+        <xacro:gazebo name="link1" color="White" />
+        <xacro:gazebo name="link2" color="White" />
+        <xacro:gazebo name="link3" color="White" />
+        <xacro:gazebo name="link4" color="White" />
+        <xacro:gazebo name="link5" color="White" />
+        <xacro:gazebo name="link6" color="White" />
+        <xacro:gazebo name="link7" color="Grey" />
+    </xacro:macro>
+</robot>
+
+
+
