@@ -29,15 +29,16 @@
 #include <beautiful_bullet/graphics/MagnumGraphics.hpp>
 
 // Spaces
-#include <control_lib/spatial/R.hpp>
 #include <control_lib/spatial/SE.hpp>
 #include <control_lib/spatial/SO.hpp>
 
 // Controllers
 #include <control_lib/controllers/Feedback.hpp>
+#include <control_lib/controllers/QuadraticControl.hpp>
 
-// Reading/Writing Files
+// CPP Utils
 #include <utils_lib/FileManager.hpp>
+#include <utils_lib/Timer.hpp>
 
 // Stream
 #include <zmq_stream/Requester.hpp>
@@ -56,12 +57,37 @@ using namespace std::chrono;
 using namespace zmq_stream;
 
 using R3 = spatial::R<3>;
+using R7 = spatial::R<7>;
 using SE3 = spatial::SE<3>;
 using SO3 = spatial::SO<3, true>;
 
+struct ParamsConfig {
+    struct controller : public defaults::controller {
+        PARAM_SCALAR(double, dt, 1.0);
+    };
+
+    struct feedback : public defaults::feedback {
+        PARAM_SCALAR(size_t, d, 7);
+    };
+
+    struct quadratic_control : public defaults::quadratic_control {
+        // State dimension
+        PARAM_SCALAR(size_t, nP, 7);
+
+        // Control/Input dimension
+        PARAM_SCALAR(size_t, nC, 0);
+
+        // Slack variable dimension
+        PARAM_SCALAR(size_t, nS, 6);
+
+        // derivative order (optimization joint velocity)
+        PARAM_SCALAR(size_t, oD, 1);
+    };
+};
+
 struct ParamsTask {
     struct controller : public defaults::controller {
-        PARAM_SCALAR(double, dt, 0.01);
+        PARAM_SCALAR(double, dt, 1.0);
     };
 
     struct feedback : public defaults::feedback {
@@ -73,7 +99,25 @@ struct FrankaModel : public bodies::MultiBody {
 public:
     FrankaModel() : bodies::MultiBody("rsc/franka/panda.urdf"), _frame("panda_joint_8"), _reference(pinocchio::LOCAL_WORLD_ALIGNED) {}
 
-    Eigen::MatrixXd jacobian(const Eigen::VectorXd& q) { return static_cast<bodies::MultiBody*>(this)->jacobian(q, _frame, _reference); }
+    Eigen::MatrixXd jacobian(const Eigen::VectorXd& q)
+    {
+        return static_cast<bodies::MultiBody*>(this)->jacobian(q, _frame, _reference);
+    }
+
+    Eigen::MatrixXd jacobianDerivative(const Eigen::VectorXd& q, const Eigen::VectorXd& dq)
+    {
+        return static_cast<bodies::MultiBody*>(this)->jacobianDerivative(q, dq, _frame, _reference);
+    }
+
+    Eigen::Matrix<double, 6, 1> framePose(const Eigen::VectorXd& q)
+    {
+        return static_cast<bodies::MultiBody*>(this)->framePose(q, _frame);
+    }
+
+    Eigen::Matrix<double, 6, 1> frameVelocity(const Eigen::VectorXd& q, const Eigen::VectorXd& dq)
+    {
+        return static_cast<bodies::MultiBody*>(this)->frameVelocity(q, dq, _frame, _reference);
+    }
 
     std::string _frame;
     pinocchio::ReferenceFrame _reference;
@@ -105,6 +149,8 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
         return *this;
     }
 
+    const bool& external() { return _external; }
+
     TaskDynamics& setExternal(const bool& value)
     {
         _external = value;
@@ -117,8 +163,8 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
         _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(x._trans, 3) : _pos(R3(x._trans));
 
         // orientation ds
-        _u.tail(3) = _rot(SO3(x._rot));
-        // _u.tail(3).setZero();
+        // _u.tail(3) = _rot(SO3(x._rot));
+        _u.tail(3).setZero();
     }
 
 protected:
@@ -133,59 +179,96 @@ protected:
     Requester _requester;
 };
 
-struct OperationSpaceController : public control::MultiBodyCtr {
-    OperationSpaceController(const std::shared_ptr<FrankaModel>& model, const SE3& target_pose) : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE), _model(model)
+struct IKController : public control::MultiBodyCtr {
+    IKController(const std::shared_ptr<FrankaModel>& model, const SE3& target_pose) : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE)
     {
-        // integration step
-        _dt = 0.03;
+        // reference
+        _reference = target_pose;
 
-        // reference frame for inverse kinematics
-        _frame = model->_frame;
-
-        // damping operation space control
-        _damping.setZero();
-        _damping.diagonal() << 5.0, 5.0, 5.0, 5.0, 5.0, 5.0;
+        // configuration target
+        R7 state, target_state;
+        state._x = model->state();
+        target_state._x = (model->positionUpper() - model->positionLower()) * 0.5 + model->positionLower();
+        _config
+            .setStiffness(1.0 * Eigen::MatrixXd::Identity(7, 7))
+            .setReference(target_state)
+            .update(state);
 
         // task target
-        SE3 pose(model->framePose());
+        SE3 pose(model->framePose(state._x));
         _task
             .setReference(target_pose)
             .update(pose);
-    }
 
-    OperationSpaceController& setTarget(const SE3& target_pose)
-    {
-        _task.setReference(target_pose);
-        return *this;
-    }
+        // inverse kinematics
+        Eigen::MatrixXd Q = 1.0 * Eigen::MatrixXd::Identity(7, 7),
+                        S = 10.0 * Eigen::MatrixXd::Identity(6, 6);
 
-    OperationSpaceController& setExternalDynamics(const bool& value)
-    {
-        _task.setExternal(value);
-        return *this;
+        _ik
+            .setModel(model)
+            .stateCost(Q)
+            // .stateReference(_config.output())
+            .slackCost(S)
+            .inverseKinematics(_task.output())
+            .positionLimits()
+            .velocityLimits()
+            .init(state);
+
+        // joints controller
+        Eigen::MatrixXd K = Eigen::MatrixXd::Zero(7, 7), D = Eigen::MatrixXd::Zero(7, 7);
+        K.diagonal() << 700.0, 700.0, 700.0, 700.0, 500.0, 500.0, 50.0;
+        D.diagonal() << 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 1.0;
+        _ctr
+            .setStiffness(K)
+            .setDamping(D);
+
+        // model
+        _model = model;
+
+        // writer
+        _writer.setFile("demo_ik_7.csv");
     }
 
     Eigen::VectorXd action(bodies::MultiBody& body) override
     {
         // state
-        Eigen::VectorXd q = body.state();
-        SE3 x(_model->framePose(q));
-        Eigen::VectorXd v = _model->frameVelocity(q, body.velocity());
+        R7 state(body.state());
+        state._v = body.velocity();
+        SE3 curr(_model->framePose(state._x));
 
-        return _model->jacobian(q).transpose() * (_damping * (_task(x) - v));
+        if (_task.external())
+            _writer.append(curr._trans.transpose());
+
+        if ((curr._trans - _reference._trans).norm() <= 0.01 && !_task.external())
+            _task.setExternal(true);
+
+        Eigen::Matrix<double, 7, 1> tau;
+        {
+            Timer timer;
+            // _config.update(state);
+            _task.update(curr);
+            auto ref = R7(state._x + 0.03 * _ik(state).segment(0, 7));
+            ref._v = Eigen::VectorXd::Zero(7);
+            tau = _ctr.setReference(ref).action(state);
+        }
+
+        return tau;
     }
 
-    // step
-    double _dt;
-
+    // reference
+    SE3 _reference;
+    // configuration space ds
+    controllers::Feedback<ParamsConfig, R7> _config;
     // task space ds
     TaskDynamics _task;
-
+    // inverse dynamics
+    controllers::QuadraticControl<ParamsConfig, FrankaModel> _ik;
+    // joint space controller
+    controllers::Feedback<ParamsConfig, R7> _ctr;
     // model
     std::shared_ptr<FrankaModel> _model;
-
-    // damping
-    Eigen::Matrix<double, 6, 6> _damping;
+    // file manager
+    FileManager _writer;
 };
 
 int main(int argc, char const* argv[])
@@ -211,24 +294,18 @@ int main(int argc, char const* argv[])
 
     FileManager mng;
     std::vector<Eigen::MatrixXd> trajectories;
-    for (size_t i = 1; i <= 1; i++) {
+    for (size_t i = 1; i <= 7; i++) {
         trajectories.push_back(mng.setFile("rsc/demos/" + demo + "/trajectory_" + std::to_string(i) + ".csv").read<Eigen::MatrixXd>());
         trajectories.back().rowwise() += Eigen::Map<Eigen::Vector3d>(&offset[0]).transpose();
-        static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().trajectory(trajectories.back(), i >= 4 ? "red" : "green");
+        static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().trajectory(trajectories.back(), i >= 4 ? "red" : "blue");
     }
 
-    // Eigen::MatrixXd traj = mng.setFile("rsc/demos/" + demo + "/trajectory_1.csv").read<Eigen::MatrixXd>();
-    // traj.rowwise() += offset.transpose();
-
     // task space target
-    // Eigen::Vector3d xDes = trajectories[0].row(0);
-    // Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
-    Eigen::Vector3d xDes(0.683783, 0.308249, 0.185577);
-    Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.922046, 0.377679, 0.0846751, 0.34527, -0.901452, 0.261066, 0.17493, -0.211479, -0.9616).finished();
-
+    Eigen::Vector3d xDes = trajectories[6].row(0);
+    Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
     SE3 tDes(oDes, xDes);
 
-    auto controller = std::make_shared<OperationSpaceController>(franka, tDes);
+    auto controller = std::make_shared<IKController>(franka, tDes);
 
     // Set controlled robot
     (*franka)
@@ -237,9 +314,6 @@ int main(int argc, char const* argv[])
 
     // Add robots and run simulation
     simulator.add(static_cast<bodies::MultiBodyPtr>(franka));
-
-    // plot trajectory
-    // static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().trajectory(trajectories[0]);
 
     // run
     // simulator.run();
@@ -262,13 +336,8 @@ int main(int argc, char const* argv[])
 
         t += dt;
 
-        // if ((xDes - franka->framePosition("panda_joint8")).norm() <= 0.01 && enter) {
-        //     std::cout << "Activating DS" << std::endl;
-        //     controller->setExternalDynamics(true);
-        //     enter = false;
-        // }
-
-        // std::cout << (xDes - franka->framePosition("panda_link7")).norm() << std::endl;
+        if ((franka->framePosition(franka->state()) - Eigen::Map<Eigen::Vector3d>(&offset[0])).norm() <= 0.05)
+            break;
 
         prev = now;
         next += 1ms;

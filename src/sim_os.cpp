@@ -1,21 +1,44 @@
-#include <iostream>
+/*
+    This file is part of beautiful-bullet.
 
-// Robot Handle
-#include <franka_control/Franka.hpp>
+    Copyright (c) 2021, 2022 Bernardo Fichera <bernardo.fichera@gmail.com>
 
-// Task Space Manifolds
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+*/
+
+// Simulator
+#include <beautiful_bullet/Simulator.hpp>
+
+// Graphics
+#include <beautiful_bullet/graphics/MagnumGraphics.hpp>
+
+// Spaces
 #include <control_lib/spatial/R.hpp>
 #include <control_lib/spatial/SE.hpp>
 #include <control_lib/spatial/SO.hpp>
 
-// Robot Model
-#include <beautiful_bullet/bodies/MultiBody.hpp>
-
-// Task Space Dynamical System & Derivative Controller
+// Controllers
 #include <control_lib/controllers/Feedback.hpp>
 
-// Reading/Writing Files
+// CPP Utils
 #include <utils_lib/FileManager.hpp>
+#include <utils_lib/Timer.hpp>
 
 // Stream
 #include <zmq_stream/Requester.hpp>
@@ -23,11 +46,20 @@
 // parse yaml
 #include <yaml-cpp/yaml.h>
 
-using namespace franka_control;
-using namespace control_lib;
+#include <chrono>
+#include <iostream>
+#include <thread>
+
 using namespace beautiful_bullet;
-using namespace zmq_stream;
+using namespace control_lib;
 using namespace utils_lib;
+using namespace std::chrono;
+using namespace zmq_stream;
+
+using std::chrono::duration;
+using std::chrono::duration_cast;
+using std::chrono::high_resolution_clock;
+using std::chrono::milliseconds;
 
 using R3 = spatial::R<3>;
 using SE3 = spatial::SE<3>;
@@ -88,7 +120,7 @@ public:
 struct TaskDynamics : public controllers::AbstractController<ParamsDS, SE3> {
     TaskDynamics()
     {
-        _d = SE3::dimension(); // adjust output dimension
+        _d = SE3::dimension();
         _u.setZero(_d);
 
         // ds
@@ -97,7 +129,7 @@ struct TaskDynamics : public controllers::AbstractController<ParamsDS, SE3> {
 
         // external ds stream
         _external = false;
-        _requester.configure("128.178.145.171", "5511");
+        _requester.configure("localhost", "5511");
     }
 
     TaskDynamics& setReference(const SE3& x)
@@ -117,13 +149,12 @@ struct TaskDynamics : public controllers::AbstractController<ParamsDS, SE3> {
 
     void update(const SE3& x) override
     {
-        // if (_external)
-        //     std::cout << _requester.request<Eigen::VectorXd>(x._trans, 3).transpose() << std::endl;
+        // position ds
         _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(x._trans, 3) : _pos(R3(x._trans));
-        // _u.head(3) = _pos(R3(x._trans));
 
-        _u.tail(3) = _rot(SO3(x._rot));
-        // _u.tail(3).setZero();
+        // orientation ds
+        // _u.tail(3) = _rot(SO3(x._rot));
+        _u.tail(3).setZero();
     }
 
 protected:
@@ -138,9 +169,8 @@ protected:
     Requester _requester;
 };
 
-class OperationSpaceController : public franka_control::control::JointControl {
-public:
-    OperationSpaceController(const SE3& target_pose) : franka_control::control::JointControl()
+struct OperationSpaceController : public control::MultiBodyCtr {
+    OperationSpaceController(const std::shared_ptr<FrankaModel>& model, const SE3& target_pose) : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE), _model(model)
     {
         // reference
         _reference = target_pose;
@@ -148,45 +178,72 @@ public:
         // ds
         _ds.setReference(target_pose);
 
-        // ctr
+        // damping operation space control
         Eigen::Matrix<double, 6, 6> damping;
         damping.setZero();
         damping.diagonal() << 20.0, 20.0, 20.0, 1.0, 1.0, 1.0;
         _ctr.setDamping(damping);
 
         // model
-        _model = std::make_shared<FrankaModel>();
+        _model = model;
+
+        // writer
+        _writer.setFile("demo_os_7.csv");
     }
 
-    Eigen::Matrix<double, 7, 1> action(const franka::RobotState& state) override
+    Eigen::VectorXd action(bodies::MultiBody& body) override
     {
         // state
-        Eigen::Matrix<double, 7, 1> q = jointPosition(state), dq = jointVelocity(state);
+        Eigen::VectorXd q = body.state(), dq = body.velocity();
         SE3 curr(_model->framePose(q));
-        // std::cout << (curr._trans - _reference._trans).norm() << std::endl;
+
+        if (_ds.external())
+            _writer.append(curr._trans.transpose());
+
         if ((curr._trans - _reference._trans).norm() <= 0.05 && !_ds.external())
             _ds.setExternal(true);
-        Eigen::Matrix<double, 6, 7> jac = _model->jacobian(q);
-        curr._v = jac * dq;
-        _reference._v = _ds(curr);
-        _ctr.setReference(_reference);
 
-        return jac.transpose() * _ctr(curr);
+        Eigen::Matrix<double, 7, 1> tau;
+        {
+            Timer timer;
+            Eigen::Matrix<double, 6, 7> jac = _model->jacobian(q);
+            curr._v = jac * dq;
+            _reference._v = _ds(curr);
+            _ctr.setReference(_reference);
+            tau = jac.transpose() * _ctr(curr);
+        }
+
+        return tau;
     }
 
-protected:
     // reference
     SE3 _reference;
     // task space ds
     TaskDynamics _ds;
-    // task space controller
+    // ctr
     controllers::Feedback<ParamsCTR, SE3> _ctr;
     // model
     std::shared_ptr<FrankaModel> _model;
+    // file manager
+    FileManager _writer;
 };
 
 int main(int argc, char const* argv[])
 {
+    // Create simulator
+    Simulator simulator;
+
+    // Add graphics
+    simulator.setGraphics(std::make_unique<graphics::MagnumGraphics>());
+
+    // Add ground
+    simulator.addGround();
+
+    // Multi Bodies
+    auto franka = std::make_shared<FrankaModel>();
+    Eigen::VectorXd state_ref = (franka->positionUpper() - franka->positionLower()) * 0.5 + franka->positionLower();
+    franka->setState(state_ref);
+
     // trajectory
     std::string demo = (argc > 1) ? "demo_" + std::string(argv[1]) : "demo_1";
     YAML::Node config = YAML::LoadFile("rsc/demos/" + demo + "/dynamics_params.yaml");
@@ -194,21 +251,55 @@ int main(int argc, char const* argv[])
 
     FileManager mng;
     std::vector<Eigen::MatrixXd> trajectories;
-    for (size_t i = 1; i <= 1; i++) {
+    for (size_t i = 1; i <= 7; i++) {
         trajectories.push_back(mng.setFile("rsc/demos/" + demo + "/trajectory_" + std::to_string(i) + ".csv").read<Eigen::MatrixXd>());
         trajectories.back().rowwise() += Eigen::Map<Eigen::Vector3d>(&offset[0]).transpose();
+        static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().trajectory(trajectories.back(), i >= 4 ? "red" : "blue");
     }
 
     // task space target
-    Eigen::Vector3d xDes = trajectories[0].row(0);
+    Eigen::Vector3d xDes = trajectories[5].row(0);
     Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
-    // Eigen::Vector3d xDes(0.683783, 0.308249, 0.185577);
-    // Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.922046, 0.377679, 0.0846751, 0.34527, -0.901452, 0.261066, 0.17493, -0.211479, -0.9616).finished();
     SE3 tDes(oDes, xDes);
 
-    Franka robot("franka");
-    robot.setJointController(std::make_unique<OperationSpaceController>(tDes));
-    robot.torque();
+    auto controller = std::make_shared<OperationSpaceController>(franka, tDes);
+
+    // Set controlled robot
+    (*franka)
+        .activateGravity()
+        .addControllers(controller);
+
+    // Add robots and run simulation
+    simulator.add(static_cast<bodies::MultiBodyPtr>(franka));
+
+    // run
+    // simulator.run();
+    simulator.initGraphics();
+
+    size_t index = 0;
+    double t = 0.0, dt = 1e-3, T = 20.0;
+
+    auto next = steady_clock::now();
+    auto prev = next - 1ms;
+
+    bool enter = true;
+    auto limits_up = franka->positionUpper(), limits_down = franka->positionLower();
+
+    while (t <= T) {
+        auto now = steady_clock::now();
+
+        if (!simulator.step(size_t(t / dt)))
+            break;
+
+        t += dt;
+
+        if ((franka->framePosition(franka->state()) - Eigen::Map<Eigen::Vector3d>(&offset[0])).norm() <= 0.05)
+            break;
+
+        prev = now;
+        next += 1ms;
+        std::this_thread::sleep_until(next);
+    }
 
     return 0;
 }

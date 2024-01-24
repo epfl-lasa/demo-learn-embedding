@@ -60,20 +60,16 @@ using R7 = spatial::R<7>;
 using SE3 = spatial::SE<3>;
 using SO3 = spatial::SO<3, true>;
 
-struct ParamsConfig
-{
-    struct controller : public defaults::controller
-    {
+struct ParamsConfig {
+    struct controller : public defaults::controller {
         PARAM_SCALAR(double, dt, 1.0e-2);
     };
 
-    struct feedback : public defaults::feedback
-    {
+    struct feedback : public defaults::feedback {
         PARAM_SCALAR(size_t, d, 7);
     };
 
-    struct quadratic_control : public defaults::quadratic_control
-    {
+    struct quadratic_control : public defaults::quadratic_control {
         // State dimension
         PARAM_SCALAR(size_t, nP, 7);
 
@@ -88,21 +84,45 @@ struct ParamsConfig
     };
 };
 
-struct ParamsTask
-{
-    struct controller : public defaults::controller
-    {
+struct ParamsTask {
+    struct controller : public defaults::controller {
         PARAM_SCALAR(double, dt, 1.0e-2);
     };
 
-    struct feedback : public defaults::feedback
-    {
+    struct feedback : public defaults::feedback {
         PARAM_SCALAR(size_t, d, 3);
     };
 };
 
-struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3>
-{
+struct FrankaModel : public bodies::MultiBody {
+public:
+    FrankaModel() : bodies::MultiBody("rsc/franka/panda.urdf"), _frame("panda_joint_8"), _reference(pinocchio::LOCAL_WORLD_ALIGNED) {}
+
+    Eigen::MatrixXd jacobian(const Eigen::VectorXd& q)
+    {
+        return static_cast<bodies::MultiBody*>(this)->jacobian(q, _frame, _reference);
+    }
+
+    Eigen::MatrixXd jacobianDerivative(const Eigen::VectorXd& q, const Eigen::VectorXd& dq)
+    {
+        return static_cast<bodies::MultiBody*>(this)->jacobianDerivative(q, dq, _frame, _reference);
+    }
+
+    Eigen::Matrix<double, 6, 1> framePose(const Eigen::VectorXd& q)
+    {
+        return static_cast<bodies::MultiBody*>(this)->framePose(q, _frame);
+    }
+
+    Eigen::Matrix<double, 6, 1> frameVelocity(const Eigen::VectorXd& q, const Eigen::VectorXd& dq)
+    {
+        return static_cast<bodies::MultiBody*>(this)->frameVelocity(q, dq, _frame, _reference);
+    }
+
+    std::string _frame;
+    pinocchio::ReferenceFrame _reference;
+};
+
+struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
     TaskDynamics()
     {
         _d = SE3::dimension();
@@ -123,7 +143,7 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3>
         _requester.configure("localhost", "5511");
     }
 
-    TaskDynamics &setReference(const SE3 &x)
+    TaskDynamics& setReference(const SE3& x)
     {
         auto p = R3(x._trans);
         p._v = x._v.head(3);
@@ -136,13 +156,13 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3>
         return *this;
     }
 
-    TaskDynamics &setExternal(const bool &value)
+    TaskDynamics& setExternal(const bool& value)
     {
         _external = value;
         return *this;
     }
 
-    void update(const SE3 &x) override
+    void update(const SE3& x) override
     {
         // position ds
         auto p = R3(x._trans);
@@ -174,38 +194,8 @@ protected:
     Requester _requester;
 };
 
-struct FrankaModel : public bodies::MultiBody
-{
-public:
-    FrankaModel() : bodies::MultiBody("rsc/franka/panda.urdf"), _frame("panda_joint_8"), _reference(pinocchio::LOCAL_WORLD_ALIGNED) {}
-
-    Eigen::MatrixXd jacobian(const Eigen::VectorXd &q)
-    {
-        return static_cast<bodies::MultiBody *>(this)->jacobian(q, _frame, _reference);
-    }
-
-    Eigen::MatrixXd jacobianDerivative(const Eigen::VectorXd &q, const Eigen::VectorXd &dq)
-    {
-        return static_cast<bodies::MultiBody *>(this)->jacobianDerivative(q, dq, _frame, _reference);
-    }
-
-    Eigen::Matrix<double, 6, 1> framePose(const Eigen::VectorXd &q)
-    {
-        return static_cast<bodies::MultiBody *>(this)->framePose(q, _frame);
-    }
-
-    Eigen::Matrix<double, 6, 1> frameVelocity(const Eigen::VectorXd &q, const Eigen::VectorXd &dq)
-    {
-        return static_cast<bodies::MultiBody *>(this)->frameVelocity(q, dq, _frame, _reference);
-    }
-
-    std::string _frame;
-    pinocchio::ReferenceFrame _reference;
-};
-
-struct IDController : public control::MultiBodyCtr
-{
-    IDController(const std::shared_ptr<FrankaModel> &model, const SE3 &target_pose) : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE)
+struct IDController : public control::MultiBodyCtr {
+    IDController(const std::shared_ptr<FrankaModel>& model, const SE3& target_pose) : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE)
     {
         // integration step
         _dt = ParamsConfig::controller::dt();
@@ -257,19 +247,19 @@ struct IDController : public control::MultiBodyCtr
             .init(state);
     }
 
-    IDController &setTarget(const SE3 &target_pose)
+    IDController& setTarget(const SE3& target_pose)
     {
         _task.setReference(target_pose);
         return *this;
     }
 
-    IDController &setExternalDynamics(const bool &value)
+    IDController& setExternalDynamics(const bool& value)
     {
         _task.setExternal(value);
         return *this;
     }
 
-    Eigen::VectorXd action(bodies::MultiBody &body) override
+    Eigen::VectorXd action(bodies::MultiBody& body) override
     {
         // config position and velocity
         R7 state(body.state());
@@ -307,7 +297,7 @@ struct IDController : public control::MultiBodyCtr
     controllers::QuadraticControl<ParamsConfig, FrankaModel> _id;
 };
 
-int main(int argc, char const *argv[])
+int main(int argc, char const* argv[])
 {
     // Create simulator
     Simulator simulator;
@@ -330,11 +320,10 @@ int main(int argc, char const *argv[])
 
     FileManager mng;
     std::vector<Eigen::MatrixXd> trajectories;
-    for (size_t i = 1; i <= 1; i++)
-    {
+    for (size_t i = 1; i <= 1; i++) {
         trajectories.push_back(mng.setFile("rsc/demos/" + demo + "/trajectory_" + std::to_string(i) + ".csv").read<Eigen::MatrixXd>());
         trajectories.back().rowwise() += Eigen::Map<Eigen::Vector3d>(&offset[0]).transpose();
-        static_cast<graphics::MagnumGraphics &>(simulator.graphics()).app().trajectory(trajectories.back(), i >= 4 ? "red" : "green");
+        static_cast<graphics::MagnumGraphics&>(simulator.graphics()).app().trajectory(trajectories.back(), i >= 4 ? "red" : "green");
     }
 
     // task space target
@@ -383,8 +372,7 @@ int main(int argc, char const *argv[])
 
     // std::cout << pinocchio::log6(ref_pose).toVector().transpose() << std::endl;
 
-    while (t <= T)
-    {
+    while (t <= T) {
         auto now = steady_clock::now();
 
         if (!simulator.step(size_t(t / dt)))

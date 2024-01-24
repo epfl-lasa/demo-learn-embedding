@@ -22,7 +22,7 @@ with open("rsc/demos/demo_" + demo_number + "/dynamics_params.yaml", "r") as yam
 
 # model
 use_cuda = torch.cuda.is_available()
-device = "cuda" # torch.device("cuda" if use_cuda else "cpu")
+device = "cpu"  # torch.device("cuda" if use_cuda else "cpu")
 if p['second_order']['embedding']['type'] == "network":
     approximator = FeedForward(p['dimension'], [p['second_order']['embedding']['params'][0]]*p['second_order']['embedding']['params'][1], 1)
 embedding = Embedding(approximator)
@@ -45,12 +45,15 @@ if p['second_order']['options']['directional_dissipation']:
 
 # callback
 offset = np.concatenate((p["offset"], np.zeros(p['dimension'])))[np.newaxis, :]
+
+
 def dynamics(x):
     x = torch.tensor(x[np.newaxis, :] - offset).float().requires_grad_(True).to(device)
     t0 = time.time()
     y = model.forward_fast(x).cpu().detach().squeeze().to(dtype=torch.float64).numpy()
     print(time.time()-t0)
     return y
+
 
 # communicator
 rep = Replier()

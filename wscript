@@ -46,13 +46,12 @@ optional = [
 ]
 
 required_bld = {
-    "src/ds_control.cpp": ["UTILSLIB", "BEAUTIFULBULLET", "CONTROLLIB"],
-    "src/joint_control.cpp": ["ZMQSTREAM", "FRANKACONTROL", "BEAUTIFULBULLET", "CONTROLLIB"],
-    "src/plot_surface.cpp": ["GRAPHICSLIB", "UTILSLIB"],
-    "src/stream_control.cpp": ["OPTITRACKLIB", "FRANKACONTROL", "CONTROLLIB"],
-    "src/qp_control.cpp": ["UTILSLIB", "BEAUTIFULBULLET", "CONTROLLIB"],
-    "src/ik_control.cpp": ["UTILSLIB", "BEAUTIFULBULLET", "CONTROLLIB"],
-    "src/stream_sim.cpp": ["ZMQSTREAM", "BEAUTIFULBULLET", "CONTROLLIB"],
+    "src/sim_os.cpp": ["UTILSLIB", "BEAUTIFULBULLET", "CONTROLLIB", "ZMQSTREAM", "YAMLCPP"],
+    "src/sim_ik.cpp": ["UTILSLIB", "BEAUTIFULBULLET", "CONTROLLIB", "ZMQSTREAM", "YAMLCPP"],
+    "src/sim_id.cpp": ["UTILSLIB", "BEAUTIFULBULLET", "CONTROLLIB", "ZMQSTREAM", "YAMLCPP"],
+    "src/exp_os.cpp": ["UTILSLIB", "FRANKACONTROL", "CONTROLLIB", "ZMQSTREAM", "YAMLCPP"],
+    "src/exp_ik.cpp": ["UTILSLIB", "FRANKACONTROL", "CONTROLLIB", "ZMQSTREAM", "YAMLCPP"],
+    "src/exp_id.cpp": ["UTILSLIB", "FRANKACONTROL", "CONTROLLIB", "ZMQSTREAM", "YAMLCPP"],
 }
 
 
@@ -92,8 +91,8 @@ def build(bld):
                 )
         else:
             bld.program(
-                    features="cxx",
-                    source=example,
-                    uselib=bld.env["libs"],
-                    target=example[:-len(".cpp")],
-                )
+                features="cxx",
+                source=example,
+                uselib=bld.env["libs"],
+                target=example[:-len(".cpp")],
+            )
