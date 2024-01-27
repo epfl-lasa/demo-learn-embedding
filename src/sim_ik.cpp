@@ -63,7 +63,7 @@ using SO3 = spatial::SO<3, true>;
 
 struct ParamsConfig {
     struct controller : public defaults::controller {
-        PARAM_SCALAR(double, dt, 1.0);
+        PARAM_SCALAR(double, dt, 1.0e-2);
     };
 
     struct feedback : public defaults::feedback {
@@ -71,23 +71,16 @@ struct ParamsConfig {
     };
 
     struct quadratic_control : public defaults::quadratic_control {
-        // State dimension
-        PARAM_SCALAR(size_t, nP, 7);
-
-        // Control/Input dimension
-        PARAM_SCALAR(size_t, nC, 0);
-
-        // Slack variable dimension
-        PARAM_SCALAR(size_t, nS, 6);
-
-        // derivative order (optimization joint velocity)
-        PARAM_SCALAR(size_t, oD, 1);
+        PARAM_SCALAR(size_t, nP, 7); // State dimension
+        PARAM_SCALAR(size_t, nC, 0); // Control/Input dimension
+        PARAM_SCALAR(size_t, nS, 6); // Slack variable dimension
+        PARAM_SCALAR(size_t, oD, 1); // derivative order (optimization joint velocity)
     };
 };
 
 struct ParamsTask {
     struct controller : public defaults::controller {
-        PARAM_SCALAR(double, dt, 1.0);
+        PARAM_SCALAR(double, dt, 1.0e-2);
     };
 
     struct feedback : public defaults::feedback {
@@ -129,13 +122,9 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
         _d = SE3::dimension();
         _u.setZero(_d);
 
-        // position ds weights
-        _pos
-            .setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3));
-
-        // orientation ds weights
-        _rot
-            .setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3));
+        // ds
+        _pos.setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3));
+        _rot.setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3));
 
         // external ds stream
         _external = false;
@@ -159,10 +148,8 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
 
     void update(const SE3& x) override
     {
-        // position ds
         _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(x._trans, 3) : _pos(R3(x._trans));
 
-        // orientation ds
         // _u.tail(3) = _rot(SO3(x._rot));
         _u.tail(3).setZero();
     }
@@ -180,39 +167,36 @@ protected:
 };
 
 struct IKController : public control::MultiBodyCtr {
-    IKController(const std::shared_ptr<FrankaModel>& model, const SE3& target_pose) : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE)
+    IKController(const std::shared_ptr<FrankaModel>& model, const SE3& ref_pose)
+        : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE), _ref_pose(ref_pose), _model(model)
     {
-        // reference
-        _reference = target_pose;
-
-        // configuration target
-        R7 state, target_state;
-        state._x = model->state();
-        target_state._x = (model->positionUpper() - model->positionLower()) * 0.5 + model->positionLower();
+        // configuration ds
+        R7 curr_state(_model->state()),
+            ref_state((_model->positionUpper() - _model->positionLower()) * 0.5 + _model->positionLower());
         _config
             .setStiffness(1.0 * Eigen::MatrixXd::Identity(7, 7))
-            .setReference(target_state)
-            .update(state);
+            .setReference(ref_state)
+            .update(curr_state);
 
-        // task target
-        SE3 pose(model->framePose(state._x));
+        // task ds
+        SE3 curr_pose(_model->framePose(curr_state._x));
         _task
-            .setReference(target_pose)
-            .update(pose);
+            .setReference(_ref_pose)
+            .update(curr_pose);
 
         // inverse kinematics
-        Eigen::MatrixXd Q = 1.0 * Eigen::MatrixXd::Identity(7, 7),
-                        S = 10.0 * Eigen::MatrixXd::Identity(6, 6);
-
+        Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(7, 7), S = Eigen::MatrixXd::Zero(6, 6);
+        Q.diagonal() << 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0;
+        S.diagonal() << 10.0, 10.0, 10.0, 10.0, 10.0, 10.0;
         _ik
-            .setModel(model)
+            .setModel(_model)
             .stateCost(Q)
             // .stateReference(_config.output())
             .slackCost(S)
             .inverseKinematics(_task.output())
             .positionLimits()
             .velocityLimits()
-            .init(state);
+            .init(curr_state);
 
         // joints controller
         Eigen::MatrixXd K = Eigen::MatrixXd::Zero(7, 7), D = Eigen::MatrixXd::Zero(7, 7);
@@ -222,41 +206,38 @@ struct IKController : public control::MultiBodyCtr {
             .setStiffness(K)
             .setDamping(D);
 
-        // model
-        _model = model;
-
         // writer
-        _writer.setFile("demo_ik_7.csv");
+        _writer.setFile("demo_ik_0.csv");
     }
 
     Eigen::VectorXd action(bodies::MultiBody& body) override
     {
-        // state
-        R7 state(body.state());
-        state._v = body.velocity();
-        SE3 curr(_model->framePose(state._x));
+        // curr
+        R7 curr_state(body.state());
+        curr_state._v = body.velocity();
+        SE3 curr_pose(_model->framePose(curr_state._x));
 
         if (_task.external())
-            _writer.append(curr._trans.transpose());
+            _writer.append(curr_pose._trans.transpose());
 
-        if ((curr._trans - _reference._trans).norm() <= 0.01 && !_task.external())
+        if ((curr_pose._trans - _ref_pose._trans).norm() <= 0.01 && !_task.external())
             _task.setExternal(true);
 
         Eigen::Matrix<double, 7, 1> tau;
         {
             Timer timer;
             // _config.update(state);
-            _task.update(curr);
-            auto ref = R7(state._x + 0.03 * _ik(state).segment(0, 7));
-            ref._v = Eigen::VectorXd::Zero(7);
-            tau = _ctr.setReference(ref).action(state);
+            _task.update(curr_pose);
+            R7 ref_state(curr_state._x + ParamsConfig::controller::dt() * _ik(curr_state).segment(0, 7));
+            ref_state._v.setZero();
+            tau = _ctr.setReference(ref_state).action(curr_state);
         }
 
         return tau;
     }
 
     // reference
-    SE3 _reference;
+    SE3 _ref_pose;
     // configuration space ds
     controllers::Feedback<ParamsConfig, R7> _config;
     // task space ds
@@ -301,11 +282,11 @@ int main(int argc, char const* argv[])
     }
 
     // task space target
-    Eigen::Vector3d xDes = trajectories[6].row(0);
-    Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
-    SE3 tDes(oDes, xDes);
+    Eigen::Vector3d ref_pos = trajectories[0].row(0);
+    Eigen::Matrix3d ref_rot = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
+    SE3 ref_pose(ref_rot, ref_pos);
 
-    auto controller = std::make_shared<IKController>(franka, tDes);
+    auto controller = std::make_shared<IKController>(franka, ref_pose);
 
     // Set controlled robot
     (*franka)
@@ -324,9 +305,6 @@ int main(int argc, char const* argv[])
 
     auto next = steady_clock::now();
     auto prev = next - 1ms;
-
-    bool enter = true;
-    auto limits_up = franka->positionUpper(), limits_down = franka->positionLower();
 
     while (t <= T) {
         auto now = steady_clock::now();

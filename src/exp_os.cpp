@@ -36,7 +36,7 @@ using SO3 = spatial::SO<3, true>;
 struct ParamsDS {
     struct controller : public defaults::controller {
         // Integration time step controller
-        PARAM_SCALAR(double, dt, 0.01);
+        PARAM_SCALAR(double, dt, 1.0e-2);
     };
 
     struct feedback : public defaults::feedback {
@@ -48,7 +48,7 @@ struct ParamsDS {
 struct ParamsCTR {
     struct controller : public defaults::controller {
         // Integration time step controller
-        PARAM_SCALAR(double, dt, 0.01);
+        PARAM_SCALAR(double, dt, 1.0e-2);
     };
 
     struct feedback : public defaults::feedback {
@@ -117,13 +117,15 @@ struct TaskDynamics : public controllers::AbstractController<ParamsDS, SE3> {
 
     void update(const SE3& x) override
     {
+        // position ds
         // if (_external)
         //     std::cout << _requester.request<Eigen::VectorXd>(x._trans, 3).transpose() << std::endl;
         _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(x._trans, 3) : _pos(R3(x._trans));
         // _u.head(3) = _pos(R3(x._trans));
 
-        _u.tail(3) = _rot(SO3(x._rot));
-        // _u.tail(3).setZero();
+        // orientation ds
+        // _u.tail(3) = _rot(SO3(x._rot));
+        _u.tail(3).setZero();
     }
 
 protected:
@@ -140,43 +142,38 @@ protected:
 
 class OperationSpaceController : public franka_control::control::JointControl {
 public:
-    OperationSpaceController(const SE3& target_pose) : franka_control::control::JointControl()
+    OperationSpaceController(const SE3& ref_pose)
+        : franka_control::control::JointControl(), _ref_pose(ref_pose), _model(std::make_shared<FrankaModel>())
     {
-        // reference
-        _reference = target_pose;
-
         // ds
-        _ds.setReference(target_pose);
+        _ds.setReference(_ref_pose);
 
         // ctr
-        Eigen::Matrix<double, 6, 6> damping;
-        damping.setZero();
+        Eigen::Matrix<double, 6, 6> damping = Eigen::Matrix<double, 6, 6>::Zero();
         damping.diagonal() << 20.0, 20.0, 20.0, 1.0, 1.0, 1.0;
         _ctr.setDamping(damping);
-
-        // model
-        _model = std::make_shared<FrankaModel>();
     }
 
     Eigen::Matrix<double, 7, 1> action(const franka::RobotState& state) override
     {
         // state
         Eigen::Matrix<double, 7, 1> q = jointPosition(state), dq = jointVelocity(state);
-        SE3 curr(_model->framePose(q));
+        SE3 curr_pose(_model->framePose(q));
+
         // std::cout << (curr._trans - _reference._trans).norm() << std::endl;
-        if ((curr._trans - _reference._trans).norm() <= 0.05 && !_ds.external())
+        if ((curr_pose._trans - _ref_pose._trans).norm() <= 0.05 && !_ds.external())
             _ds.setExternal(true);
         Eigen::Matrix<double, 6, 7> jac = _model->jacobian(q);
-        curr._v = jac * dq;
-        _reference._v = _ds(curr);
-        _ctr.setReference(_reference);
+        curr_pose._v = jac * dq;
+        _ref_pose._v = _ds(curr_pose);
+        _ctr.setReference(_ref_pose);
 
-        return jac.transpose() * _ctr(curr);
+        return jac.transpose() * _ctr(curr_pose);
     }
 
 protected:
     // reference
-    SE3 _reference;
+    SE3 _ref_pose;
     // task space ds
     TaskDynamics _ds;
     // task space controller
@@ -200,14 +197,12 @@ int main(int argc, char const* argv[])
     }
 
     // task space target
-    Eigen::Vector3d xDes = trajectories[0].row(0);
-    Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
-    // Eigen::Vector3d xDes(0.683783, 0.308249, 0.185577);
-    // Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.922046, 0.377679, 0.0846751, 0.34527, -0.901452, 0.261066, 0.17493, -0.211479, -0.9616).finished();
-    SE3 tDes(oDes, xDes);
+    Eigen::Vector3d ref_pos = trajectories[0].row(0);
+    Eigen::Matrix3d ref_rot = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
+    SE3 ref_pose(ref_rot, ref_pos);
 
     Franka robot("franka");
-    robot.setJointController(std::make_unique<OperationSpaceController>(tDes));
+    robot.setJointController(std::make_unique<OperationSpaceController>(ref_pose));
     robot.torque();
 
     return 0;

@@ -1,3 +1,27 @@
+/*
+    This file is part of beautiful-bullet.
+
+    Copyright (c) 2021, 2022 Bernardo Fichera <bernardo.fichera@gmail.com>
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+*/
+
 #include <iostream>
 
 // Robot Handle
@@ -35,19 +59,9 @@ using R7 = spatial::R<7>;
 using SE3 = spatial::SE<3>;
 using SO3 = spatial::SO<3, true>;
 
-struct ParamsTask {
-    struct controller : public defaults::controller {
-        PARAM_SCALAR(double, dt, 0.01); // Integration time step controller
-    };
-
-    struct feedback : public defaults::feedback {
-        PARAM_SCALAR(size_t, d, 3); // Output dimension
-    };
-};
-
 struct ParamsConfig {
     struct controller : public defaults::controller {
-        PARAM_SCALAR(double, dt, 0.01); // Integration time step controller
+        PARAM_SCALAR(double, dt, 1.0e-2); // Integration time step controller
     };
 
     struct feedback : public defaults::feedback {
@@ -59,6 +73,16 @@ struct ParamsConfig {
         PARAM_SCALAR(size_t, nC, 0); // Control/Input dimension
         PARAM_SCALAR(size_t, nS, 6); // Slack variable dimension
         PARAM_SCALAR(size_t, oD, 1); // derivative order (optimization joint velocity)
+    };
+};
+
+struct ParamsTask {
+    struct controller : public defaults::controller {
+        PARAM_SCALAR(double, dt, 1.0e-2); // Integration time step controller
+    };
+
+    struct feedback : public defaults::feedback {
+        PARAM_SCALAR(size_t, d, 3); // Output dimension
     };
 };
 
@@ -126,6 +150,7 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
         //     std::cout << _requester.request<Eigen::VectorXd>(x._trans, 3).transpose() << std::endl;
         _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(x._trans, 3) : _pos(R3(x._trans));
         // _u.head(3) = _pos(R3(x._trans));
+
         // _u.tail(3) = _rot(SO3(x._rot));
         _u.tail(3).setZero();
     }
@@ -144,25 +169,21 @@ protected:
 
 class IKController : public franka_control::control::JointControl {
 public:
-    IKController(const SE3& target_pose) : franka_control::control::JointControl()
+    IKController(const franka::RobotState& state, const SE3& ref_pose)
+        : franka_control::control::JointControl(), _ref_pose(ref_pose), _model(std::make_shared<FrankaModel>())
     {
-        // step
-        _dt = 0.03;
-
-        // reference
-        _reference = target_pose;
-
-        // model
-        _model = std::make_shared<FrankaModel>();
-
-        // task ds
-        _task.setReference(target_pose);
-
         // config ds
-        R7 target_state((_model->positionUpper() - _model->positionLower()) * 0.5 + _model->positionLower());
+        R7 curr_state(jointPosition(state)),
+            ref_state((_model->positionUpper() - _model->positionLower()) * 0.5 + _model->positionLower());
         _config
             .setStiffness(1.0 * Eigen::MatrixXd::Identity(7, 7))
-            .setReference(target_state);
+            .setReference(ref_state)
+            .update(curr_state);
+
+        // task ds
+        SE3 curr_pose(_model->framePose(curr_state._x));
+        _task.setReference(_ref_pose)
+            .update(curr_pose);
 
         // ik
         Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(7, 7), S = Eigen::MatrixXd::Zero(6, 6);
@@ -176,43 +197,42 @@ public:
             .inverseKinematics(_task.output())
             .positionLimits()
             .velocityLimits()
-            .init(target_state);
+            .init(curr_state);
 
         // ctr
         Eigen::MatrixXd K = Eigen::MatrixXd::Zero(7, 7), D = Eigen::MatrixXd::Zero(7, 7);
         K.diagonal() << 800.0, 1100.0, 800.0, 1100.0, 100.0, 10.0, 10.0;
         D.diagonal() << 50.0, 50.0, 50.0, 50.0, 10.0, 1.0, 1.0;
-        _ctr.setStiffness(K).setDamping(D);
+        _ctr
+            .setStiffness(K)
+            .setDamping(D);
     }
 
     Eigen::Matrix<double, 7, 1> action(const franka::RobotState& state) override
     {
-        // state
-        R7 config_curr(jointPosition(state));
-        config_curr._v = jointVelocity(state);
-        SE3 task_curr(_model->framePose(config_curr._x));
+        // curr
+        R7 curr_state(jointPosition(state));
+        curr_state._v = jointVelocity(state);
+        SE3 curr_pose(_model->framePose(curr_state._x));
 
-        // update task ds
-        std::cout << (task_curr._trans - _reference._trans).norm() << std::endl;
-        if ((task_curr._trans - _reference._trans).norm() <= 0.03 && !_task.external())
+        // config ds
+        // _config.update(curr_state);
+
+        // task ds
+        if ((curr_pose._trans - _ref_pose._trans).norm() <= 0.03 && !_task.external())
             _task.setExternal(true);
-        _task.update(task_curr);
-
-        // update config ds
-        _config.update(config_curr);
+        _task.update(curr_pose);
 
         // ik
-        R7 config_ref(config_curr._x + _dt * _ik(config_curr).segment(0, 7));
-        config_ref._v = Eigen::VectorXd::Zero(7);
+        R7 ref_state(curr_state._x + ParamsConfig::controller::dt() * _ik(curr_state).segment(0, 7));
+        ref_state._v.setZero();
 
-        return _ctr.setReference(config_ref).action(config_curr);
+        return _ctr.setReference(ref_state).action(curr_state);
     }
 
 protected:
-    // external ds
-    double _dt;
     // reference
-    SE3 _reference;
+    SE3 _ref_pose;
     // task space ds
     TaskDynamics _task;
     // configuration space ds
@@ -240,14 +260,12 @@ int main(int argc, char const* argv[])
     }
 
     // task space target
-    Eigen::Vector3d xDes = trajectories[0].row(0);
-    Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
-    // Eigen::Vector3d xDes(0.683783, 0.308249, 0.185577);
-    // Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.922046, 0.377679, 0.0846751, 0.34527, -0.901452, 0.261066, 0.17493, -0.211479, -0.9616).finished();
-    SE3 tDes(oDes, xDes);
+    Eigen::Vector3d ref_pos = trajectories[0].row(0);
+    Eigen::Matrix3d ref_rot = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
+    SE3 ref_pose(ref_rot, ref_pos);
 
     Franka robot("franka");
-    robot.setJointController(std::make_unique<IKController>(tDes));
+    robot.setJointController(std::make_unique<IKController>(robot.state(), ref_pose));
     robot.torque();
 
     return 0;

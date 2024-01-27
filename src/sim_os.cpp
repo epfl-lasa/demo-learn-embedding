@@ -56,11 +56,6 @@ using namespace utils_lib;
 using namespace std::chrono;
 using namespace zmq_stream;
 
-using std::chrono::duration;
-using std::chrono::duration_cast;
-using std::chrono::high_resolution_clock;
-using std::chrono::milliseconds;
-
 using R3 = spatial::R<3>;
 using SE3 = spatial::SE<3>;
 using SO3 = spatial::SO<3, true>;
@@ -68,7 +63,7 @@ using SO3 = spatial::SO<3, true>;
 struct ParamsDS {
     struct controller : public defaults::controller {
         // Integration time step controller
-        PARAM_SCALAR(double, dt, 0.01);
+        PARAM_SCALAR(double, dt, 1.0e-2);
     };
 
     struct feedback : public defaults::feedback {
@@ -80,7 +75,7 @@ struct ParamsDS {
 struct ParamsCTR {
     struct controller : public defaults::controller {
         // Integration time step controller
-        PARAM_SCALAR(double, dt, 0.01);
+        PARAM_SCALAR(double, dt, 1.0e-2);
     };
 
     struct feedback : public defaults::feedback {
@@ -170,54 +165,48 @@ protected:
 };
 
 struct OperationSpaceController : public control::MultiBodyCtr {
-    OperationSpaceController(const std::shared_ptr<FrankaModel>& model, const SE3& target_pose) : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE), _model(model)
+    OperationSpaceController(const std::shared_ptr<FrankaModel>& model, const SE3& ref_pose)
+        : control::MultiBodyCtr(ControlMode::CONFIGURATIONSPACE), _ref_pose(ref_pose), _model(model)
     {
-        // reference
-        _reference = target_pose;
-
         // ds
-        _ds.setReference(target_pose);
+        _ds.setReference(_ref_pose);
 
         // damping operation space control
-        Eigen::Matrix<double, 6, 6> damping;
-        damping.setZero();
+        Eigen::Matrix<double, 6, 6> damping = Eigen::Matrix<double, 6, 6>::Zero();
         damping.diagonal() << 20.0, 20.0, 20.0, 1.0, 1.0, 1.0;
         _ctr.setDamping(damping);
 
-        // model
-        _model = model;
-
         // writer
-        _writer.setFile("demo_os_7.csv");
+        _writer.setFile("demo_os_0.csv");
     }
 
     Eigen::VectorXd action(bodies::MultiBody& body) override
     {
         // state
         Eigen::VectorXd q = body.state(), dq = body.velocity();
-        SE3 curr(_model->framePose(q));
+        SE3 curr_pose(_model->framePose(q));
 
         if (_ds.external())
-            _writer.append(curr._trans.transpose());
+            _writer.append(curr_pose._trans.transpose());
 
-        if ((curr._trans - _reference._trans).norm() <= 0.05 && !_ds.external())
+        if ((curr_pose._trans - _ref_pose._trans).norm() <= 0.05 && !_ds.external())
             _ds.setExternal(true);
 
         Eigen::Matrix<double, 7, 1> tau;
         {
             Timer timer;
             Eigen::Matrix<double, 6, 7> jac = _model->jacobian(q);
-            curr._v = jac * dq;
-            _reference._v = _ds(curr);
-            _ctr.setReference(_reference);
-            tau = jac.transpose() * _ctr(curr);
+            curr_pose._v = jac * dq;
+            _ref_pose._v = _ds(curr_pose);
+            _ctr.setReference(_ref_pose);
+            tau = jac.transpose() * _ctr(curr_pose);
         }
 
         return tau;
     }
 
     // reference
-    SE3 _reference;
+    SE3 _ref_pose;
     // task space ds
     TaskDynamics _ds;
     // ctr
@@ -258,11 +247,11 @@ int main(int argc, char const* argv[])
     }
 
     // task space target
-    Eigen::Vector3d xDes = trajectories[5].row(0);
-    Eigen::Matrix3d oDes = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
-    SE3 tDes(oDes, xDes);
+    Eigen::Vector3d ref_pos = trajectories[0].row(0);
+    Eigen::Matrix3d ref_rot = (Eigen::Matrix3d() << 0.768647, 0.239631, 0.593092, 0.0948479, -0.959627, 0.264802, 0.632602, -0.147286, -0.760343).finished();
+    SE3 ref_pose(ref_rot, ref_pos);
 
-    auto controller = std::make_shared<OperationSpaceController>(franka, tDes);
+    auto controller = std::make_shared<OperationSpaceController>(franka, ref_pose);
 
     // Set controlled robot
     (*franka)
@@ -281,9 +270,6 @@ int main(int argc, char const* argv[])
 
     auto next = steady_clock::now();
     auto prev = next - 1ms;
-
-    bool enter = true;
-    auto limits_up = franka->positionUpper(), limits_down = franka->positionLower();
 
     while (t <= T) {
         auto now = steady_clock::now();
