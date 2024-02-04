@@ -93,7 +93,7 @@ struct TaskDynamics : public controllers::AbstractController<ParamsDS, SE3> {
 
         // ds
         _pos.setStiffness(5.0 * Eigen::MatrixXd::Identity(3, 3));
-        _rot.setStiffness(1.0 * Eigen::MatrixXd::Identity(3, 3));
+        _rot.setStiffness(0.0 * Eigen::MatrixXd::Identity(3, 3));
 
         // external ds stream
         _external = false;
@@ -122,9 +122,13 @@ struct TaskDynamics : public controllers::AbstractController<ParamsDS, SE3> {
         //     std::cout << _requester.request<Eigen::VectorXd>(x._trans, 3).transpose() << std::endl;
         _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(x._trans, 3) : _pos(R3(x._trans));
         // _u.head(3) = _pos(R3(x._trans));
+        if (_u.head(3).norm() >= 0.3)
+            _u.head(3) /= _u.head(3).norm() / 0.3;
 
         // orientation ds
         // _u.tail(3) = _rot(SO3(x._rot));
+        // if (_u.tail(3).norm() >= 0.5)
+        //     _u.tail(3) /= _u.tail(3).norm() / 0.5;
         _u.tail(3).setZero();
     }
 
@@ -150,8 +154,11 @@ public:
 
         // ctr
         Eigen::Matrix<double, 6, 6> damping = Eigen::Matrix<double, 6, 6>::Zero();
-        damping.diagonal() << 20.0, 20.0, 20.0, 1.0, 1.0, 1.0;
+        damping.diagonal() << 120.0, 120.0, 120.0, 5.0, 5.0, 5.0;
         _ctr.setDamping(damping);
+
+        // writer
+        _writer.setFile("exp_os_7.csv");
     }
 
     Eigen::Matrix<double, 7, 1> action(const franka::RobotState& state) override
@@ -160,8 +167,11 @@ public:
         Eigen::Matrix<double, 7, 1> q = jointPosition(state), dq = jointVelocity(state);
         SE3 curr_pose(_model->framePose(q));
 
-        // std::cout << (curr._trans - _reference._trans).norm() << std::endl;
-        if ((curr_pose._trans - _ref_pose._trans).norm() <= 0.05 && !_ds.external())
+        // if (_ds.external())
+        //     _writer.append(curr_pose._trans.transpose());
+
+        std::cout << (curr_pose._trans - _ref_pose._trans).norm() << std::endl;
+        if ((curr_pose._trans - _ref_pose._trans).norm() <= 0.03 && !_ds.external())
             _ds.setExternal(true);
         Eigen::Matrix<double, 6, 7> jac = _model->jacobian(q);
         curr_pose._v = jac * dq;
@@ -180,6 +190,8 @@ protected:
     controllers::Feedback<ParamsCTR, SE3> _ctr;
     // model
     std::shared_ptr<FrankaModel> _model;
+    // file manager
+    FileManager _writer;
 };
 
 int main(int argc, char const* argv[])
@@ -191,7 +203,7 @@ int main(int argc, char const* argv[])
 
     FileManager mng;
     std::vector<Eigen::MatrixXd> trajectories;
-    for (size_t i = 1; i <= 1; i++) {
+    for (size_t i = 1; i <= 7; i++) {
         trajectories.push_back(mng.setFile("rsc/demos/" + demo + "/trajectory_" + std::to_string(i) + ".csv").read<Eigen::MatrixXd>());
         trajectories.back().rowwise() += Eigen::Map<Eigen::Vector3d>(&offset[0]).transpose();
     }

@@ -60,7 +60,7 @@ using SO3 = spatial::SO<3, true>;
 
 struct ParamsConfig {
     struct controller : public defaults::controller {
-        PARAM_SCALAR(double, dt, 1.0e-2);
+        PARAM_SCALAR(double, dt, 5.0e-3);
     };
 
     struct feedback : public defaults::feedback {
@@ -77,7 +77,7 @@ struct ParamsConfig {
 
 struct ParamsTask {
     struct controller : public defaults::controller {
-        PARAM_SCALAR(double, dt, 1.0e-2);
+        PARAM_SCALAR(double, dt, 5.0e-3);
     };
 
     struct feedback : public defaults::feedback {
@@ -120,14 +120,14 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
         _u.setZero(_d);
 
         // position ds weights
-        double k = 3.0, d = 2.0 * std::sqrt(k);
+        double k = 30.0, d = 2.0 * std::sqrt(k);
         _pos
             .setStiffness(k * Eigen::MatrixXd::Identity(3, 3))
             .setDamping(d * Eigen::MatrixXd::Identity(3, 3));
 
         // orientation ds weights
-        _rot.setStiffness(2.0 * Eigen::MatrixXd::Identity(3, 3))
-            .setDamping(0.1 * Eigen::MatrixXd::Identity(3, 3));
+        _rot.setStiffness(k * Eigen::MatrixXd::Identity(3, 3))
+            .setDamping(d * Eigen::MatrixXd::Identity(3, 3));
 
         // external ds stream
         _external = false;
@@ -162,13 +162,23 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
         p._v = x._v.head(3);
         Eigen::Matrix<double, 6, 1> state;
         state << p._x, p._v;
-        _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(state, 3) : _pos(p);
+        if (_external)
+            _u.head(3) = _requester.request<Eigen::VectorXd>(state, 3);
+        else {
+            _u.head(3) = _pos(p);
+            if (_u.head(3).norm() >= 5.0)
+                _u.head(3) /= _u.head(3).norm() / 5.0;
+        }
+        // _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(state, 3) : _pos(p);
+        // // _u.head(3) = _pos(p);
+        // if (_u.head(3).norm() >= 5.0)
+        //     _u.head(3) /= _u.head(3).norm() / 5.0;
 
         // orientation ds
         auto r = SO3(x._rot);
         r._v = x._v.tail(3);
-        // _u.tail(3) = _rot(r);
-        _u.tail(3).setZero();
+        _u.tail(3) = _rot(r);
+        // _u.tail(3).setZero();
     }
 
 protected:
@@ -189,7 +199,7 @@ struct IDController : public franka_control::control::JointControl {
     {
         // configuration ds
         R7 curr_state(jointPosition(state)),
-            ref_state((_model->positionUpper() - _model->positionLower()) * 0.5 + _model->positionLower());
+            ref_state((_model->positionUpper() + _model->positionLower()) * 0.5);
         curr_state._v = jointVelocity(state);
         ref_state._v.setZero();
         double k = 1.0, d = 2.0 * std::sqrt(k);
@@ -211,9 +221,9 @@ struct IDController : public franka_control::control::JointControl {
 
         // inverse dynamics
         Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(7, 7), R = Eigen::MatrixXd::Zero(7, 7), S = Eigen::MatrixXd::Zero(6, 6);
-        Q.diagonal() << 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0;
-        R.diagonal() << 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1;
-        S.diagonal() << 70.0, 70.0, 70.0, 70.0, 70.0, 70.0;
+        Q.diagonal() << 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1;
+        R.diagonal() << 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01;
+        S.diagonal() << 5000.0, 5000.0, 5000.0, 10.0, 10.0, 10.0;
         _id
             .setModel(_model)
             .stateCost(Q)
@@ -228,6 +238,9 @@ struct IDController : public franka_control::control::JointControl {
             .accelerationLimits()
             .effortLimits()
             .init(curr_state);
+
+        // writer
+        _writer.setFile("exp_id_7.csv");
     }
 
     Eigen::Matrix<double, 7, 1> action(const franka::RobotState& state) override
@@ -238,8 +251,12 @@ struct IDController : public franka_control::control::JointControl {
         SE3 curr_pose(_model->framePose(curr_state._x));
         curr_pose._v = _model->frameVelocity(curr_state._x, curr_state._v);
 
+        if (_task.external())
+            _writer.append(curr_pose._trans.transpose());
+
         // task ds
-        if ((curr_pose._trans - _ref_pose._trans).norm() <= 0.05 && !_task.external())
+        // std::cout << (curr_pose._trans - _ref_pose._trans).norm() << std::endl;
+        if ((curr_pose._trans - _ref_pose._trans).norm() <= 0.04 && !_task.external())
             _task.setExternal(true);
         _task.update(curr_pose);
 
@@ -249,8 +266,24 @@ struct IDController : public franka_control::control::JointControl {
         // input reference
         _ref_input = _model->gravityVector(curr_state._x);
 
+        // std::cout << "pinocchio" << std::endl;
+        // std::cout << _model->jacobian(curr_state._x) << std::endl;
+        // std::cout << "franka" << std::endl;
+        // std::cout << jacobian(state) << std::endl;
+        // std::cout << "-" << std::endl;
+
+        // _id.update(curr_state);
+        // auto ref_vel = curr_state._v + ParamsConfig::controller::dt() * _id.output().segment(0, 7);
+        // auto ref_pos = curr_state._x + ParamsConfig::controller::dt() * ref_vel;
+
+        // Eigen::MatrixXd K = Eigen::MatrixXd::Zero(7, 7), D = Eigen::MatrixXd::Zero(7, 7);
+        // K.diagonal() << 2500.0, 2500.0, 2500.0, 2500.0, 1000.0, 1000.0, 1000.0;
+        // K *= 2.0;
+        // D.diagonal() << 30.0, 30.0, 30.0, 30.0, 10.0, 10.0, 10.0;
+        // D *= 0.5;
+
         // ctr
-        return _id(curr_state).segment(7, 7);
+        return _id(curr_state).segment(7, 7) - _ref_input;
     }
 
     // pose reference

@@ -61,7 +61,7 @@ using SO3 = spatial::SO<3, true>;
 
 struct ParamsConfig {
     struct controller : public defaults::controller {
-        PARAM_SCALAR(double, dt, 1.0e-2); // Integration time step controller
+        PARAM_SCALAR(double, dt, 1.0e-3); // Integration time step controller
     };
 
     struct feedback : public defaults::feedback {
@@ -78,7 +78,7 @@ struct ParamsConfig {
 
 struct ParamsTask {
     struct controller : public defaults::controller {
-        PARAM_SCALAR(double, dt, 1.0e-2); // Integration time step controller
+        PARAM_SCALAR(double, dt, 1.0e-3); // Integration time step controller
     };
 
     struct feedback : public defaults::feedback {
@@ -150,9 +150,13 @@ struct TaskDynamics : public controllers::AbstractController<ParamsTask, SE3> {
         //     std::cout << _requester.request<Eigen::VectorXd>(x._trans, 3).transpose() << std::endl;
         _u.head(3) = _external ? _requester.request<Eigen::VectorXd>(x._trans, 3) : _pos(R3(x._trans));
         // _u.head(3) = _pos(R3(x._trans));
+        if (_u.head(3).norm() >= 0.3)
+            _u.head(3) /= _u.head(3).norm() / 0.3;
 
-        // _u.tail(3) = _rot(SO3(x._rot));
-        _u.tail(3).setZero();
+        _u.tail(3) = _rot(SO3(x._rot));
+        if (_u.tail(3).norm() >= 0.5)
+            _u.tail(3) /= _u.tail(3).norm() / 0.5;
+        // _u.tail(3).setZero();
     }
 
 protected:
@@ -174,7 +178,7 @@ public:
     {
         // config ds
         R7 curr_state(jointPosition(state)),
-            ref_state((_model->positionUpper() - _model->positionLower()) * 0.5 + _model->positionLower());
+            ref_state((_model->positionUpper() + _model->positionLower()) * 0.5);
         _config
             .setStiffness(1.0 * Eigen::MatrixXd::Identity(7, 7))
             .setReference(ref_state)
@@ -187,12 +191,12 @@ public:
 
         // ik
         Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(7, 7), S = Eigen::MatrixXd::Zero(6, 6);
-        Q.diagonal() << 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0;
-        S.diagonal() << 10.0, 10.0, 10.0, 10.0, 10.0, 10.0;
+        Q.diagonal() << 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0;
+        S.diagonal() << 1000.0, 1000.0, 1000.0, 10.0, 10.0, 10.0;
         _ik
             .setModel(_model)
             .stateCost(Q)
-            // .stateReference(_config.output())
+            .stateReference(_config.output())
             .slackCost(S)
             .inverseKinematics(_task.output())
             .positionLimits()
@@ -201,11 +205,19 @@ public:
 
         // ctr
         Eigen::MatrixXd K = Eigen::MatrixXd::Zero(7, 7), D = Eigen::MatrixXd::Zero(7, 7);
-        K.diagonal() << 800.0, 1100.0, 800.0, 1100.0, 100.0, 10.0, 10.0;
-        D.diagonal() << 50.0, 50.0, 50.0, 50.0, 10.0, 1.0, 1.0;
+        K.diagonal() << 2500.0, 2500.0, 2500.0, 2500.0, 1000.0, 1000.0, 1000.0;
+        K *= 20;
+        // K.diagonal() << 700.0, 700.0, 700.0, 700.0, 500.0, 500.0, 300.0;
+        D.diagonal() << 30.0, 30.0, 30.0, 30.0, 10.0, 10.0, 10.0;
         _ctr
             .setStiffness(K)
             .setDamping(D);
+
+        // writer
+        _writer.setFile("exp_ik_7.csv");
+
+        _open = false;
+        _ik_state = curr_state;
     }
 
     Eigen::Matrix<double, 7, 1> action(const franka::RobotState& state) override
@@ -213,21 +225,42 @@ public:
         // curr
         R7 curr_state(jointPosition(state));
         curr_state._v = jointVelocity(state);
-        SE3 curr_pose(_model->framePose(curr_state._x));
+        SE3 curr_pose(_model->framePose(_open ? _ik_state._x : curr_state._x));
+
+        // if (_task.external())
+        //     _writer.append(curr_pose._trans.transpose());
 
         // config ds
-        // _config.update(curr_state);
+        _config.update(_open ? _ik_state : curr_state);
 
         // task ds
+        // std::cout << (curr_pose._trans - _ref_pose._trans).norm() << std::endl;
         if ((curr_pose._trans - _ref_pose._trans).norm() <= 0.03 && !_task.external())
             _task.setExternal(true);
         _task.update(curr_pose);
 
         // ik
-        R7 ref_state(curr_state._x + ParamsConfig::controller::dt() * _ik(curr_state).segment(0, 7));
+        auto state_vel = _ik(curr_state).segment(0, 7);
+        // R7 ref_state(curr_state._x + ParamsConfig::controller::dt() * state_vel);
+        R7 ref_state;
+        if (_open) {
+            ref_state._x = _ik_state._x + ParamsConfig::controller::dt() * _ik(_ik_state).segment(0, 7);
+            _ik_state = ref_state;
+        }
+        else
+            ref_state._x = curr_state._x + ParamsConfig::controller::dt() * _ik(curr_state).segment(0, 7);
         ref_state._v.setZero();
+        // std::cout << state_vel.transpose() << std::endl;
 
-        return _ctr.setReference(ref_state).action(curr_state);
+        auto tau = _ctr.setReference(ref_state).action(curr_state);
+
+        std::cout << "tau" << std::endl;
+        std::cout << tau.transpose() << std::endl;
+        std::cout << "ref" << std::endl;
+        std::cout << ref_state._x.transpose() << std::endl;
+        std::cout << "-" << std::endl;
+
+        return tau;
     }
 
 protected:
@@ -243,6 +276,12 @@ protected:
     controllers::Feedback<ParamsConfig, R7> _ctr;
     // model
     std::shared_ptr<FrankaModel> _model;
+    // file manager
+    FileManager _writer;
+
+    // prev state
+    bool _open;
+    R7 _ik_state;
 };
 
 int main(int argc, char const* argv[])
@@ -254,7 +293,7 @@ int main(int argc, char const* argv[])
 
     FileManager mng;
     std::vector<Eigen::MatrixXd> trajectories;
-    for (size_t i = 1; i <= 1; i++) {
+    for (size_t i = 1; i <= 7; i++) {
         trajectories.push_back(mng.setFile("rsc/demos/" + demo + "/trajectory_" + std::to_string(i) + ".csv").read<Eigen::MatrixXd>());
         trajectories.back().rowwise() += Eigen::Map<Eigen::Vector3d>(&offset[0]).transpose();
     }
