@@ -26,5 +26,5 @@ second_order:
 
   options:
     obstacle_avoidance: false
-    directional_dissipation: false
+    directional_dissipation: true
     exponential_dissipation: false

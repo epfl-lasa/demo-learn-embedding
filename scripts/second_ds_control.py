@@ -41,7 +41,7 @@ if p['second_order']['options']['directional_dissipation']:
     model_first = FirstGeometry(Embedding(approximator_first), torch.zeros(p["dimension"]).to(device), stiffness_first).to(device)
     TorchHelper.load(model_first, "rsc/demos/demo_" + demo_number + "/models/"+p['first_order']['name'], device)
     model.field = model_first
-    model.field_weight = 20.0
+    model.field_weight = 15.0
 
 # callback
 offset = np.concatenate((p["offset"], np.zeros(p['dimension'])))[np.newaxis, :]
