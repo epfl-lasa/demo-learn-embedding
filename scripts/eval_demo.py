@@ -23,7 +23,7 @@ def subsample(x, num_samples):
     return np.array(idx)
 
 
-demo_name = "demo_ik"
+demo_name = "exp_id"
 
 with open("rsc/demos/demo_2/dynamics_params.yaml", "r") as yamlfile:
     offset = np.array(yaml.load(yamlfile, Loader=yaml.SafeLoader)["offset"])
@@ -31,18 +31,28 @@ with open("rsc/demos/demo_2/dynamics_params.yaml", "r") as yamlfile:
 dtwd = np.zeros(3)
 
 fig = plt.figure()
-ax = fig.add_subplot(111, projection="3d")
+ax = fig.add_subplot(111, projection="3d", computed_zorder=False)
 
 for i in range(5, 8):
     traj_1 = np.loadtxt("rsc/demos/demo_2/trajectory_"+str(i)+".csv") + offset
     idx = subsample(traj_1, 1000)
     traj_1 = traj_1[idx]
-    traj_2 = np.loadtxt(demo_name+"_"+str(i)+".csv")
+
+    traj_2 = np.loadtxt("rsc/eval/"+demo_name+"_"+str(i)+".csv")
     idx = subsample(traj_2, 1000)
     traj_2 = traj_2[idx]
+
+    handle_testing = ax.scatter(traj_1[::10, 0], traj_1[::10, 1], traj_1[::10, 2], s=30, edgecolors='k', c='blue', alpha=0.6, label='Testing Points')
+    handle_motion = ax.plot(traj_2[:, 0], traj_2[:, 1], traj_2[:, 2], c="k", label='End-Effector Motion')[0]
+    handle_attractor = ax.scatter(offset[0], offset[1], offset[2], s=200, edgecolors='k', c='yellow', marker='*', alpha=1, label='Attractor', zorder=10)
+
     dtwd[i-5] = dtw_ndim.distance(traj_1, traj_2)
-    ax.scatter(traj_1[:, 0], traj_1[:, 1], traj_1[:, 2], c="r")
-    ax.scatter(traj_2[:, 0], traj_2[:, 1], traj_2[:, 2], c="b")
+
+ax.legend(handles=[handle_testing, handle_motion, handle_attractor], loc='upper right', fontsize=16)
+fig.patch.set_visible(False)
+ax.axis('off')
+fig.tight_layout()
+fig.savefig('media/'+demo_name+'.png', format='png', dpi=100, bbox_inches="tight")
 
 print(np.round(dtwd.mean(), 2), "\pm", np.round(dtwd.std(), 2))
-plt.show()
+# plt.show()
