@@ -1,6 +1,7 @@
-# demo-learn-embedding
-Repositories containing source code to reproduce demonstrations in the paper...
+# Learning Embedding via Demonstrations
+Repositories containing source code to reproduce the robotics in demo in https://arxiv.org/abs/2403.11948
 
+## Some reminder
 Generate trace
 ```sh
 apitrace trace ./build/src/examples/ik_control
